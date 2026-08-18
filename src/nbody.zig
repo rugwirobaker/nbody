@@ -16,6 +16,18 @@ pub const Preset = config.Preset;
 pub const platform = @import("platform.zig");
 pub const lane_count = platform.lane_count;
 
+/// RFC Part 2: the scalar baseline — AoS layout, seeding, and the kernel.
+pub const sim = @import("sim.zig");
+pub const Particle = sim.Particle;
+pub const Sim = sim.Sim;
+
+pub const seed = @import("seed.zig");
+pub const scalar = @import("scalar.zig");
+pub const properties = @import("properties.zig");
+
 test {
     std.testing.refAllDecls(@This());
+    // The RFC §2.5 acceptance tests. Imported only in the test build so they
+    // never enter the library's public surface.
+    _ = @import("acceptance_test.zig");
 }

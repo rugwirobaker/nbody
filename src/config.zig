@@ -79,6 +79,11 @@ pub const Config = struct {
         if (!(cfg.mass_min > 0)) return "mass_min must be > 0";
         if (cfg.mass_max < cfg.mass_min) return "mass_max must be >= mass_min";
         if (cfg.d_merge2 < 0) return "d_merge2 must be >= 0";
+        // Phase C (RFC §2.6) has not landed yet. Rejecting the flag here beats
+        // silently ignoring it: a caller who asks for merging and gets a
+        // fixed-n run would only find out via a failed conservation test.
+        // Delete this rule when merge() exists.
+        if (cfg.merging) return "merging (Phase C, RFC §2.6) is not implemented yet";
         return null;
     }
 };

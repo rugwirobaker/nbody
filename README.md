@@ -23,7 +23,7 @@ off-limits, and every performance number is Phase-A nanoseconds per tick under
 
 | Module | Depends on | What it is |
 | --- | --- | --- |
-| `nbody` | — | The core library: AoS + SoA layouts, scalar + SIMD kernels, `tick()`, presets, merging, diagnostics. Renderer-free, I/O-free. |
+| `nbody` | — | The core library: AoS + SoA layouts, scalar + SIMD kernels, `tick()`, presets, merging, conserved properties. Renderer-free, I/O-free. |
 | `nbody-bench` | `nbody` | The measurement harness: ns/tick vs n, both kernels, same seed. |
 | `nbody-viz` | `nbody`, raylib | The demo client. Not started — physics and measurement come first. |
 
@@ -72,6 +72,23 @@ zig build bench -Doptimize=ReleaseFast  # the measurement harness
 Benchmarks in any mode other than `ReleaseFast` measure register spills rather
 than the algorithm, so the build warns about it.
 
+## What the baseline compiles to
+
+Checked once against the disassembly, because "the scalar baseline is really
+scalar" is the assumption the whole project rests on
+(`objdump -d zig-out/bin/nbody-bench`, aarch64 ReleaseFast):
+
+- The inner loop consumes **one source per iteration**, with one scalar
+  `fsqrt s` and one scalar `fdiv s` per pair. Strict FP stopped LLVM from
+  reordering the `ax +=` reduction across iterations, which is exactly the
+  protection it is there for — the n² traversal is intact and un-widened.
+- LLVM *did* pair the two independent accumulators, emitting 2-wide NEON
+  (`fsub.2s`, `fmul.2s`, `faddp.2s`, `fadd.2s`) for the x and y component
+  arithmetic. That is not a reordering of any single reduction, so nothing
+  forbids it, and it is what the natural code honestly compiles to — but it
+  means the baseline already gets 2-wide on the cheap operations, which is
+  worth remembering when reading the eventual speedup.
+
 ## A note on lane width
 
 The SIMD kernel is parameterized by `std.simd.suggestVectorLength(f32)` — 8 on
@@ -82,14 +99,24 @@ harness sweeps lane width as a labeled experiment instead.
 
 ## Status
 
-Scaffolding. Nothing below is claimed until its test passes.
+Nothing below is claimed until its test passes.
 
-- [ ] Part 2 — scalar baseline (AoS), presets, merging
-- [ ] Acceptance tests (a)–(e): two-body asymmetry, momentum, CoM drift,
-      energy, determinism
-- [ ] Part 3 — SoA layout, SIMD Phase A/B, padding invariants
-- [ ] Scalar-vs-SIMD short-horizon agreement + benchmark sweep
+- [x] Part 2 — scalar baseline (AoS): `computeAccelerations`, `integrate`,
+      `tick`
+- [x] Seeding — `disk` and `keplerian` presets, uniform-area radii, tangential
+      velocities, net momentum zeroed
+- [x] Acceptance tests (a)–(e) in their merging-off forms: two-body asymmetry,
+      momentum, CoM drift, symplectic energy, determinism
+- [x] Benchmark: Phase-A ns/tick sweep vs n
+- [ ] Phase C — merging (RFC §2.6), and the deferred halves of tests (b)–(d):
+      momentum across merge events, and `KE + PE + Σheat`
+- [ ] Part 3 — SoA layout, SIMD kernels, padding invariants
+- [ ] Scalar-vs-SIMD short-horizon agreement + two-kernel benchmark sweep
 - [ ] `nbody-viz` (raylib)
+
+`merging = true` is currently rejected by `Config.validate` rather than
+silently ignored, so nothing can quietly depend on the phase that doesn't
+exist yet.
 
 Reference: Core Dumped, *"Why compilers can't optimize this"* — used for
 notation and motivation; all results here derive from the RFC's own first

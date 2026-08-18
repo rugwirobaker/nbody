@@ -51,6 +51,11 @@ Zig 0.16.0. Verify claims by building, not by memory.
   `list.append(gpa, x)`.
 - **Random:** `std.Random.DefaultPrng.init(seed)`, then `prng.random()` and
   `r.float(f32)` / `r.intRangeLessThan(...)`.
+- **`std.time.Timer` is gone** (`std/time.zig` is now only unit constants), so
+  RFC §2.5's spelling no longer compiles. Monotonic timing goes through the
+  `Io` clock: `const t0 = std.Io.Timestamp.now(io, .awake);` … then
+  `t0.durationTo(std.Io.Timestamp.now(io, .awake)).toNanoseconds()`, which
+  returns `i96`. `.awake` is `CLOCK_UPTIME_RAW` on macOS.
 
 ## Rules that protect the experiment
 
@@ -63,6 +68,18 @@ performance.
   LLVM from auto-vectorizing the scalar baseline; a secretly-vectorized
   "scalar" build makes the whole comparison a lie. Re-check the disassembly
   when Phase A changes.
+- **What the baseline's disassembly actually shows** (aarch64, ReleaseFast,
+  verified 2026-08-19). The protection worked: `computeAccelerations` consumes
+  **one source per iteration**, with a scalar `fsqrt s` and `fdiv s` per pair —
+  strict FP kept LLVM from reordering the `ax +=` reduction across iterations,
+  so the n² traversal is intact. What LLVM *did* do is SLP-pair the two
+  independent accumulators, emitting `fsub.2s` / `fmul.2s` / `faddp.2s` /
+  `fadd.2s` for the x and y component arithmetic. That is not a reordering of
+  any one reduction, so no rule forbids it, and it is what the natural code
+  honestly compiles to. Note the consequence when reading speedups: the
+  baseline already gets 2-wide on the cheap component math. Zig 0.16 exposes no
+  flag to disable the vectorizer. `docs/disassembly.md` explains how to
+  read that output and what to look for.
 - **Both builds run the same algorithm.** Same force law, same integration
   order, same **ordered**-pair n² traversal. Do not apply the pairwise-symmetry
   halving (RFC Step 6) to the baseline, even though it is a real optimization —
