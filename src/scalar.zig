@@ -19,6 +19,7 @@
 const std = @import("std");
 
 const Config = @import("config.zig").Config;
+const merge = @import("merge.zig");
 const Sim = @import("sim.zig").Sim;
 
 /// Computes the net acceleration on every live particle — the RFC's **Phase A**
@@ -70,10 +71,10 @@ pub fn tick(sim: *Sim, cfg: Config) void {
     computeAccelerations(sim, cfg);
     integrate(sim, cfg);
 
-    // Phase C (merging, RFC §2.6) is not implemented yet. `Config.validate`
-    // rejects `cfg.merging` until it lands, so this gap cannot silently
-    // no-op a caller who asked for merging.
-    std.debug.assert(!cfg.merging);
+    // Phase C is a distinct pass *after* integration, never inside Phase A —
+    // accelerations must be computed over a stable particle set (RFC §2.6).
+    // Callers who need the merge count call `mergeCollisions` directly.
+    if (cfg.merging) _ = merge.mergeCollisions(sim, cfg);
 }
 
 test "computeAccelerations leaves particle state untouched (frozen snapshot, Step 8)" {

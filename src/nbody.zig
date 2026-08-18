@@ -23,6 +23,7 @@ pub const Sim = sim.Sim;
 
 pub const seed = @import("seed.zig");
 pub const scalar = @import("scalar.zig");
+pub const merge = @import("merge.zig");
 pub const properties = @import("properties.zig");
 
 test {

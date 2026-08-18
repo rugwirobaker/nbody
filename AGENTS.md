@@ -93,6 +93,18 @@ performance.
   *new* velocity. The reverse ordering costs the same and pumps energy in.
 - **No `if (i != j)` in the inner loop.** Softening makes the self term exactly
   zero; the branch's absence is intentional and load-bearing for the lanes.
+- **Merging's energy books don't close, and that is expected** (verified
+  2026-08-19). RFC §2.5 test (d) claims `KE + PE + Σheat` stays constant across
+  merges. It cannot: Step 10 banks the destroyed *kinetic* energy into `heat`,
+  but the merged pair's mutual potential vanishes with the pair, stepping total
+  energy **up** by roughly 0.3 % per merge at default config. This is a gap in
+  the spec's wording, not a bug — do not "fix" it by loosening a tolerance
+  until the test passes, and do not fold the pair potential into `heat` without
+  the user's say-so, because Step 10 is normative about what `heat` holds. The
+  tests split the claim instead: momentum, total mass and determinism are
+  asserted sharply across merges; energy flatness only on merge-free ticks
+  (which is why `mergeCollisions` returns a count); and the full ledger is
+  proved exactly in a two-body case where the vanished term is computable.
 - **Padding invariant (RFC §3.2).** In the SoA build every slot at index ≥ `n`
   has mass 0. Any code path that shrinks `n` (i.e. merging's swap-remove) must
   re-zero the vacated slot, or an invisible ghost particle keeps pulling.

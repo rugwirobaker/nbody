@@ -217,7 +217,7 @@ instruction, never a function name.
 
 **A whole-binary histogram is meaningless.** Counting `grep -c "fmul\.2d"`
 over the entire file mixes every function together. The `.2d` (f64) forms in
-this binary come from seeding's momentum accumulation and the diagnostics —
+this binary come from seeding's momentum accumulation and the properties —
 not Phase A at all. Always locate the loop first, then read it; a global count
 answers a question you didn't ask.
 

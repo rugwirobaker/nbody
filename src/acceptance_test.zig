@@ -4,18 +4,24 @@
 //! system is chaotic, so "the particles end up here" is not a testable claim,
 //! while "momentum is conserved" is, forever, at any horizon.
 //!
-//! **Scope.** Phase C (merging, RFC §2.6) has not landed, so tests (b), (c)
-//! and (d) appear here in their merging-off forms, which is exactly the part
-//! of each claim that the implemented code can be held to. What is deferred
-//! with Phase C, and must be added when it arrives:
-//!   - (b) momentum conserved *across merge events*
-//!   - (c) CoM drift unbroken by the Step 10 position rule
-//!   - (d) KE + PE + Σheat constant, each merge's KE step equal to its ΔKE
+//! Each test appears twice where merging changes what can be claimed: once
+//! with `merging = false`, isolating the integrator and the force law, and
+//! once with merging on, which is the stronger form — test (b) across merge
+//! events is what catches an un-weighted average in `mergePair`.
+//!
+//! **One caveat on energy.** RFC §2.5 test (d) says `KE + PE + Σheat` holds
+//! constant across merges. It doesn't, quite: Step 10 banks the destroyed
+//! *kinetic* energy into `heat`, but the merged pair's mutual potential simply
+//! vanishes with the pair, stepping total energy up at each merge. So the
+//! energy claims here are split — proved exactly where they can be (the
+//! two-body test below, where the vanished term is computable), and asserted
+//! only on merge-free ticks at system scale. See `src/merge.zig`.
 
 const std = @import("std");
 const testing = std.testing;
 
 const Config = @import("config.zig").Config;
+const merge = @import("merge.zig");
 const properties = @import("properties.zig");
 const scalar = @import("scalar.zig");
 const sim_mod = @import("sim.zig");
@@ -228,6 +234,186 @@ test "(e) determinism: same seed and config, bitwise-identical state" {
     ));
 }
 
+/// Runs one tick as its three separate phases, returning how many merges
+/// Phase C performed. Equivalent to `scalar.tick`, but the count is what lets
+/// the energy test below tell merge ticks apart from merge-free ones.
+fn tickCountingMerges(sim: *Sim, cfg: Config) usize {
+    scalar.computeAccelerations(sim, cfg);
+    scalar.integrate(sim, cfg);
+    return if (cfg.merging) merge.mergeCollisions(sim, cfg) else 0;
+}
+
+test "(b) momentum is conserved across merge events" {
+    // RFC Step 9's argument uses only the pairwise equal-and-opposite
+    // structure, never the form of the force — so it must survive a collision
+    // rule, which is just a very strong internal interaction. This is the test
+    // an un-weighted average in mergePair fails on the first merge.
+    const cfg = Config{ .n = 128, .merging = true, .heat_decay = 1.0 };
+    var sim = try Sim.initSeeded(testing.allocator, cfg);
+    defer sim.deinit(testing.allocator);
+
+    const n0 = sim.n;
+    for (0..2000) |_| _ = tickCountingMerges(&sim, cfg);
+
+    // Without this the test passes vacuously if nothing ever merged.
+    try testing.expect(sim.n < n0);
+
+    const p = properties.momentum(sim.live());
+    const scale = properties.momentumScale(sim.live());
+    try testing.expect(scale > 0);
+    try testing.expect(p.magnitude() / scale < 1e-5);
+}
+
+test "(b) total mass is conserved while n falls" {
+    // Merging is the only thing that changes n, and Step 10 makes the merged
+    // mass additive — so M must not move even as particles disappear.
+    const cfg = Config{ .n = 128, .merging = true, .heat_decay = 1.0 };
+    var sim = try Sim.initSeeded(testing.allocator, cfg);
+    defer sim.deinit(testing.allocator);
+
+    const n0 = sim.n;
+    const m0 = properties.totalMass(sim.live());
+
+    for (0..2000) |_| _ = tickCountingMerges(&sim, cfg);
+
+    try testing.expect(sim.n < n0);
+    try testing.expectApproxEqRel(m0, properties.totalMass(sim.live()), 1e-6);
+}
+
+test "(c) the centre of mass drifts straight through merge events" {
+    // Step 10's position rule is what protects this: placing the product
+    // anywhere but the pair's centre of mass makes the system's CoM jump.
+    const cfg = Config{ .n = 128, .merging = true, .heat_decay = 1.0 };
+    var sim = try Sim.initSeeded(testing.allocator, cfg);
+    defer sim.deinit(testing.allocator);
+
+    const boost_x: f32 = 0.3;
+    const boost_y: f32 = -0.2;
+    for (sim.live()) |*p| {
+        p.vx += boost_x;
+        p.vy += boost_y;
+    }
+
+    const n0 = sim.n;
+    const c0 = properties.centerOfMass(sim.live());
+    const v0 = properties.centerOfMassVelocity(sim.live());
+
+    const ticks = 2000;
+    var max_deviation: f64 = 0;
+    for (1..ticks + 1) |k| {
+        _ = tickCountingMerges(&sim, cfg);
+
+        const t = @as(f64, @floatFromInt(k)) * @as(f64, cfg.dt);
+        const c = properties.centerOfMass(sim.live());
+        const predicted = properties.Vec2{ .x = c0.x + v0.x * t, .y = c0.y + v0.y * t };
+        max_deviation = @max(max_deviation, c.sub(predicted).magnitude());
+    }
+
+    try testing.expect(sim.n < n0);
+    const travelled = v0.magnitude() * @as(f64, ticks) * @as(f64, cfg.dt);
+    try testing.expect(max_deviation / travelled < 1e-3);
+}
+
+test "(d) merging: the energy books close exactly for a single merge" {
+    // The sharp version of test (d)'s merging clause. Two particles and
+    // nothing else, so after the merge there are no pairs left and PE is
+    // exactly zero — which makes the vanished mutual potential exactly the
+    // pre-merge PE, and every term in the ledger computable.
+    const cfg = Config{ .heat_decay = 1.0, .merging = true, .d_merge2 = 0.01 };
+    var sim = try Sim.initCapacity(testing.allocator, 2);
+    defer sim.deinit(testing.allocator);
+    sim.push(.{ .x = 0, .y = 0, .vx = 1.5, .vy = -0.5, .mass = 3, .heat = 0 });
+    sim.push(.{ .x = 0.05, .y = 0, .vx = -2.0, .vy = 1.0, .mass = 1, .heat = 0 });
+
+    const ke0 = properties.kineticEnergy(sim.live());
+    const pe0 = properties.potentialEnergy(sim.live(), cfg);
+    const p0 = properties.momentum(sim.live());
+    const m0 = properties.totalMass(sim.live());
+
+    try testing.expectEqual(@as(usize, 1), merge.mergeCollisions(&sim, cfg));
+    try testing.expectEqual(@as(usize, 1), sim.n);
+
+    const ke1 = properties.kineticEnergy(sim.live());
+    const pe1 = properties.potentialEnergy(sim.live(), cfg);
+    const heat1 = properties.totalHeat(sim.live());
+    const p1 = properties.momentum(sim.live());
+
+    // Exact across the merge: momentum and mass.
+    try testing.expectApproxEqRel(p0.x, p1.x, 1e-6);
+    try testing.expectApproxEqRel(p0.y, p1.y, 1e-6);
+    try testing.expectApproxEqRel(m0, properties.totalMass(sim.live()), 1e-6);
+
+    // A single particle has no pairs, so PE is exactly zero.
+    try testing.expectEqual(@as(f64, 0), pe1);
+
+    // The destroyed kinetic energy went into heat, all of it: ΔKE = ½μv_rel².
+    const mu = (3.0 * 1.0) / 4.0;
+    const rvx = 1.5 - -2.0;
+    const rvy = -0.5 - 1.0;
+    const expected_dke = 0.5 * mu * (rvx * rvx + rvy * rvy);
+    try testing.expectApproxEqRel(expected_dke, ke0 - ke1, 1e-5);
+    try testing.expectApproxEqRel(expected_dke, heat1, 1e-5);
+
+    // And the whole ledger: total energy steps up by exactly the mutual
+    // potential that vanished with the pair. This is the term RFC test (d)
+    // does not account for.
+    const e0 = ke0 + pe0;
+    const e1 = ke1 + pe1 + heat1;
+    try testing.expectApproxEqRel(-pe0, e1 - e0, 1e-5);
+    try testing.expect(e1 > e0); // upward, because the vanished term is negative
+}
+
+test "(d) merging: energy is flat on every merge-free tick" {
+    // At system scale the merge jumps are real, so the claim is made only
+    // where it holds: on a tick that merged nothing, this is the same
+    // symplectic system as the merging-off test and must behave identically.
+    const cfg = Config{ .n = 96, .merging = true, .heat_decay = 1.0 };
+    var sim = try Sim.initSeeded(testing.allocator, cfg);
+    defer sim.deinit(testing.allocator);
+
+    var quiet_ticks: usize = 0;
+    var merge_ticks: usize = 0;
+    var max_quiet_step: f64 = 0;
+
+    for (0..2000) |_| {
+        const before = properties.totalEnergy(sim.live(), cfg);
+        const merges = tickCountingMerges(&sim, cfg);
+        const after = properties.totalEnergy(sim.live(), cfg);
+
+        if (merges == 0) {
+            quiet_ticks += 1;
+            max_quiet_step = @max(max_quiet_step, @abs((after - before) / before));
+        } else {
+            merge_ticks += 1;
+        }
+    }
+
+    // Both kinds of tick must actually have occurred for this to mean anything.
+    try testing.expect(quiet_ticks > 100);
+    try testing.expect(merge_ticks > 0);
+    try testing.expect(max_quiet_step < 1e-3);
+}
+
+test "(e) determinism holds across merge events" {
+    // Greedy merging in a fixed scan order is the whole reason this survives:
+    // same seed ⇒ same merges ⇒ same trajectory, bit for bit.
+    const cfg = Config{ .n = 96, .merging = true };
+    var a = try Sim.initSeeded(testing.allocator, cfg);
+    defer a.deinit(testing.allocator);
+    var b = try Sim.initSeeded(testing.allocator, cfg);
+    defer b.deinit(testing.allocator);
+
+    const n0 = a.n;
+    for (0..1000) |_| {
+        scalar.tick(&a, cfg);
+        scalar.tick(&b, cfg);
+    }
+
+    try testing.expect(a.n < n0);
+    try testing.expectEqual(a.n, b.n);
+    try testing.expectEqualSlices(Particle, a.live(), b.live());
+}
+
 test "a lone particle never moves" {
     // The trivial invariant that catches a sign error or a stray self-term:
     // with nothing to pull it, the self-interaction must be exactly zero.
@@ -242,7 +428,6 @@ test "a lone particle never moves" {
     try testing.expectEqual(@as(f32, -3), sim.live()[0].y);
 }
 
-test "config rejects merging until Phase C lands" {
-    try testing.expect(Config.validate(.{ .merging = true }) != null);
-    try testing.expect(Config.validate(.{ .merging = false }) == null);
+test "a merging config is valid" {
+    try testing.expect(Config.validate(.{ .merging = true }) == null);
 }

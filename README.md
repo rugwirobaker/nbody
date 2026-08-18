@@ -108,15 +108,24 @@ Nothing below is claimed until its test passes.
 - [x] Acceptance tests (a)–(e) in their merging-off forms: two-body asymmetry,
       momentum, CoM drift, symplectic energy, determinism
 - [x] Benchmark: Phase-A ns/tick sweep vs n
-- [ ] Phase C — merging (RFC §2.6), and the deferred halves of tests (b)–(d):
-      momentum across merge events, and `KE + PE + Σheat`
+- [x] Phase C — merging (RFC §2.6): `mergeCollisions`, `mergePair`, greedy
+      restart, swap-remove
+- [x] Tests (b)–(e) in their merging-on forms: momentum and total mass across
+      merge events, CoM drift, determinism, and the single-merge energy ledger
 - [ ] Part 3 — SoA layout, SIMD kernels, padding invariants
 - [ ] Scalar-vs-SIMD short-horizon agreement + two-kernel benchmark sweep
 - [ ] `nbody-viz` (raylib)
 
-`merging = true` is currently rejected by `Config.validate` rather than
-silently ignored, so nothing can quietly depend on the phase that doesn't
-exist yet.
+One caveat on what the green suite proves. RFC test (d) says
+`KE + PE + Σheat` holds constant across merges; it doesn't, quite. Step 10
+banks the destroyed *kinetic* energy into `heat`, but the merged pair's mutual
+potential simply vanishes along with the pair, stepping total energy up at each
+merge — about 0.3 % of the total per merge at default config. The
+implementation follows Step 10 exactly and the tests split the claim
+accordingly: momentum, total mass and determinism are asserted sharply across
+merges, energy flatness is asserted only on merge-free ticks, and the full
+ledger is proved exactly in a two-body case where the vanished term is
+computable.
 
 Reference: Core Dumped, *"Why compilers can't optimize this"* — used for
 notation and motivation; all results here derive from the RFC's own first
