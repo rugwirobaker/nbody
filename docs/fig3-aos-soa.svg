@@ -1,0 +1,106 @@
+<svg viewBox="0 0 720 440" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+  <defs>
+    <style>
+      .ink{fill:#2b2f36;} .muted{fill:#5b6470;}
+      .cell{fill:#eef1f5;stroke:#c4ccd6;stroke-width:1;}
+      .xcell{fill:#dcebf6;stroke:#9db6cf;stroke-width:1.4;}
+      .mono{font-family:'SF Mono','Consolas','Menlo',monospace;}
+      .want{fill:#c8752f;}
+    </style>
+  </defs>
+
+  <text x="30" y="34" class="ink" font-size="15" font-weight="700">Figure 3 — Why SIMD needs SoA: the x-coordinates the kernel wants to load together</text>
+  <text x="30" y="52" class="muted" font-size="11">Highlighted = the 8 consecutive x values one vector load needs. Contiguous only under SoA.</text>
+
+  <!-- ===== AoS ===== -->
+  <text x="30" y="92" class="ink mono" font-size="12" font-weight="700">AoS &#8212; []Particle</text>
+  <text x="30" y="108" class="muted" font-size="10">one struct per particle; fields interleaved</text>
+
+  <!-- 5 particles x 5 fields = 25 cells, cell width 26 -->
+  <g transform="translate(30,120)">
+    <!-- generate cells: particle p, field f -->
+    <!-- fields order: x y vx vy m -->
+    <!-- p0 -->
+    <g font-size="9" text-anchor="middle" class="mono">
+      <!-- row of 25 -->
+      <!-- We'll place x cells highlighted -->
+      <!-- p0 -->
+      <rect class="xcell" x="0"   y="0" width="26" height="26"/><text x="13"  y="17">x</text>
+      <rect class="cell"  x="26"  y="0" width="26" height="26"/><text x="39"  y="17">y</text>
+      <rect class="cell"  x="52"  y="0" width="26" height="26"/><text x="65"  y="17">vx</text>
+      <rect class="cell"  x="78"  y="0" width="26" height="26"/><text x="91"  y="17">vy</text>
+      <rect class="cell"  x="104" y="0" width="26" height="26"/><text x="117" y="17">m</text>
+      <!-- p1 -->
+      <rect class="xcell" x="130" y="0" width="26" height="26"/><text x="143" y="17">x</text>
+      <rect class="cell"  x="156" y="0" width="26" height="26"/><text x="169" y="17">y</text>
+      <rect class="cell"  x="182" y="0" width="26" height="26"/><text x="195" y="17">vx</text>
+      <rect class="cell"  x="208" y="0" width="26" height="26"/><text x="221" y="17">vy</text>
+      <rect class="cell"  x="234" y="0" width="26" height="26"/><text x="247" y="17">m</text>
+      <!-- p2 -->
+      <rect class="xcell" x="260" y="0" width="26" height="26"/><text x="273" y="17">x</text>
+      <rect class="cell"  x="286" y="0" width="26" height="26"/><text x="299" y="17">y</text>
+      <rect class="cell"  x="312" y="0" width="26" height="26"/><text x="325" y="17">vx</text>
+      <rect class="cell"  x="338" y="0" width="26" height="26"/><text x="351" y="17">vy</text>
+      <rect class="cell"  x="364" y="0" width="26" height="26"/><text x="377" y="17">m</text>
+      <!-- p3 -->
+      <rect class="xcell" x="390" y="0" width="26" height="26"/><text x="403" y="17">x</text>
+      <rect class="cell"  x="416" y="0" width="26" height="26"/><text x="429" y="17">y</text>
+      <rect class="cell"  x="442" y="0" width="26" height="26"/><text x="455" y="17">vx</text>
+      <rect class="cell"  x="468" y="0" width="26" height="26"/><text x="481" y="17">vy</text>
+      <rect class="cell"  x="494" y="0" width="26" height="26"/><text x="507" y="17">m</text>
+      <!-- p4 -->
+      <rect class="xcell" x="520" y="0" width="26" height="26"/><text x="533" y="17">x</text>
+      <rect class="cell"  x="546" y="0" width="26" height="26"/><text x="559" y="17">y</text>
+      <rect class="cell"  x="572" y="0" width="26" height="26"/><text x="585" y="17">vx</text>
+      <rect class="cell"  x="598" y="0" width="26" height="26"/><text x="611" y="17">vy</text>
+      <rect class="cell"  x="624" y="0" width="26" height="26"/><text x="637" y="17">m</text>
+    </g>
+    <!-- brace under a particle -->
+    <path d="M0,32 L0,38 L130,38 L130,32" fill="none" stroke="#9aa3ae" stroke-width="1"/>
+    <text x="65" y="50" class="muted" font-size="9" text-anchor="middle">one Particle</text>
+    <!-- gap markers between x cells -->
+    <text x="325" y="66" class="want" font-size="10" text-anchor="middle" font-weight="700">x's are 5 slots apart &#8594; strided gather (slow), cache line wastes y/vx/vy/m</text>
+  </g>
+
+  <!-- ===== SoA ===== -->
+  <text x="30" y="248" class="ink mono" font-size="12" font-weight="700">SoA &#8212; struct Particles { x: []f32, ... }</text>
+  <text x="30" y="264" class="muted" font-size="10">one array per field; same-field values adjacent</text>
+
+  <g transform="translate(30,276)">
+    <g font-size="9" text-anchor="middle" class="mono">
+      <!-- x array: 8 highlighted contiguous -->
+      <rect class="xcell" x="0"   y="0" width="26" height="26"/><text x="13"  y="17">x&#8320;</text>
+      <rect class="xcell" x="26"  y="0" width="26" height="26"/><text x="39"  y="17">x&#8321;</text>
+      <rect class="xcell" x="52"  y="0" width="26" height="26"/><text x="65"  y="17">x&#8322;</text>
+      <rect class="xcell" x="78"  y="0" width="26" height="26"/><text x="91"  y="17">x&#8323;</text>
+      <rect class="xcell" x="104" y="0" width="26" height="26"/><text x="117" y="17">x&#8324;</text>
+      <rect class="xcell" x="130" y="0" width="26" height="26"/><text x="143" y="17">x&#8325;</text>
+      <rect class="xcell" x="156" y="0" width="26" height="26"/><text x="169" y="17">x&#8326;</text>
+      <rect class="xcell" x="182" y="0" width="26" height="26"/><text x="195" y="17">x&#8327;</text>
+      <!-- then y array begins -->
+      <rect class="cell"  x="208" y="0" width="26" height="26"/><text x="221" y="17">y&#8320;</text>
+      <rect class="cell"  x="234" y="0" width="26" height="26"/><text x="247" y="17">y&#8321;</text>
+      <rect class="cell"  x="260" y="0" width="26" height="26"/><text x="273" y="17">y&#8322;</text>
+      <rect class="cell"  x="286" y="0" width="26" height="26"/><text x="299" y="17">y&#8323;</text>
+      <rect class="cell"  x="312" y="0" width="26" height="26"/><text x="325" y="17">&#8230;</text>
+      <rect class="cell"  x="338" y="0" width="26" height="26"/><text x="351" y="17">vx&#8320;</text>
+      <rect class="cell"  x="364" y="0" width="26" height="26"/><text x="377" y="17">vx&#8321;</text>
+      <rect class="cell"  x="390" y="0" width="26" height="26"/><text x="403" y="17">&#8230;</text>
+      <rect class="cell"  x="416" y="0" width="26" height="26"/><text x="429" y="17">vy&#8320;</text>
+      <rect class="cell"  x="442" y="0" width="26" height="26"/><text x="455" y="17">&#8230;</text>
+      <rect class="cell"  x="468" y="0" width="26" height="26"/><text x="481" y="17">m&#8320;</text>
+      <rect class="cell"  x="494" y="0" width="26" height="26"/><text x="507" y="17">m&#8321;</text>
+      <rect class="cell"  x="520" y="0" width="26" height="26"/><text x="533" y="17">m&#8322;</text>
+      <rect class="cell"  x="546" y="0" width="26" height="26"/><text x="559" y="17">&#8230;</text>
+    </g>
+    <path d="M0,32 L0,38 L208,38 L208,32" fill="none" stroke="#9db6cf" stroke-width="1.2"/>
+    <text x="104" y="50" class="muted" font-size="9" text-anchor="middle">x[0..8] &#8212; one contiguous vector load</text>
+    <text x="470" y="50" class="want" font-size="10" text-anchor="middle" font-weight="700">unit-stride, no waste</text>
+  </g>
+
+  <!-- caption -->
+  <rect x="30" y="360" width="630" height="60" rx="6" fill="#f4f6f9" stroke="#c4ccd6" stroke-width="1"/>
+  <text x="45" y="382" class="ink" font-size="10.5" font-weight="700">The transform (§3.2):</text>
+  <text x="45" y="399" class="muted" font-size="10.5">A vector load pulls 8 adjacent 32-bit values. Under AoS the 8 x's sit 5 slots apart — the hardware must gather them and</text>
+  <text x="45" y="413" class="muted" font-size="10.5">every 64-byte cache line drags along unwanted y/vx/vy/m freight. SoA makes x[0..8] one unit-stride load, cache lines all-useful.</text>
+</svg>

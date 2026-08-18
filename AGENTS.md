@@ -1,0 +1,100 @@
+# AGENTS.md
+
+Instructions for coding agents working in this repository. Read this before
+touching code; read [`docs/RFC-001.md`](docs/RFC-001.md) before touching
+physics.
+
+## What this project is
+
+A 2D gravitational N-body simulation implemented **twice over the same
+algorithm** — a scalar AoS baseline and a SIMD SoA kernel — so that the
+measured speedup between them is honest. `docs/RFC-001.md` is the
+specification and the authority; its **normative** rules (marked *must* /
+*must not*) are requirements, not preferences. When code and RFC disagree, the
+RFC wins unless the user says otherwise. Cite RFC steps/sections in comments
+rather than restating derivations.
+
+Three packages, dependencies pointing one way:
+
+| Package | Depends on | Rule |
+| --- | --- | --- |
+| `nbody` (`src/`) | — | Renderer-free and I/O-free. No printing, no files, no raylib. |
+| `nbody-bench` (`bench/`) | `nbody` | Measurement only. |
+| `nbody-viz` | `nbody`, raylib | Not started. |
+
+## Commands
+
+```sh
+zig build test                          # library tests — run before claiming anything works
+zig build bench -Doptimize=ReleaseFast  # the harness; any other mode measures spills, not the algorithm
+```
+
+Zig 0.16.0. Verify claims by building, not by memory.
+
+## Zig 0.16 API notes
+
+0.15/0.16 broke a lot of `std`. These are verified in this repo — do not
+"correct" them back to the pre-0.15 spellings:
+
+- **Entry point:** `pub fn main(init: std.process.Init) !void`. I/O needs an
+  explicit `Io` instance, which arrives as `init.io`; long-lived allocation
+  comes from `init.arena.allocator()`; arguments from
+  `init.minimal.args.toSlice(arena)`.
+- **Files moved:** `std.Io.File`, not `std.fs.File`. Buffered stdout is
+  `var w: std.Io.File.Writer = .init(.stdout(), io, &buf);` then
+  `const out = &w.interface;` … `try out.flush();` — the flush is not optional.
+- **Alignment is an enum:** `allocator.alignedAlloc(f32, .@"64", n)` takes
+  `std.mem.Alignment`; convert with `.toByteUnits()`.
+- **Build graph:** `b.addExecutable(.{ .name = …, .root_module = b.createModule(…) })`
+  and `b.addTest(.{ .root_module = mod })`. Modules carry `target`/`optimize`.
+- **Containers are unmanaged:** `std.ArrayList(T) = .empty`, `list.deinit(gpa)`,
+  `list.append(gpa, x)`.
+- **Random:** `std.Random.DefaultPrng.init(seed)`, then `prng.random()` and
+  `r.float(f32)` / `r.intRangeLessThan(...)`.
+
+## Rules that protect the experiment
+
+Violating any of these silently invalidates the benchmark or the physics. They
+are the reason this project exists, so they outrank tidiness, cleverness, and
+performance.
+
+- **Never enable fast math.** No `@setFloatMode(.optimized)` anywhere, and no
+  reordering of float reductions by hand. Strict FP semantics are what stop
+  LLVM from auto-vectorizing the scalar baseline; a secretly-vectorized
+  "scalar" build makes the whole comparison a lie. Re-check the disassembly
+  when Phase A changes.
+- **Both builds run the same algorithm.** Same force law, same integration
+  order, same **ordered**-pair n² traversal. Do not apply the pairwise-symmetry
+  halving (RFC Step 6) to the baseline, even though it is a real optimization —
+  it is explicitly rejected for comparison fairness.
+- **The baseline stays scalar AoS.** It is the experimental control, not code
+  to be improved.
+- **Frozen snapshot (RFC Step 8).** Phase A reads positions/masses and writes
+  only `ax[]`/`ay[]`. No particle state moves until every acceleration in the
+  tick exists. Never fuse Phase A and Phase B.
+- **Semi-implicit Euler (RFC Step 5).** Velocity first, then position using the
+  *new* velocity. The reverse ordering costs the same and pumps energy in.
+- **No `if (i != j)` in the inner loop.** Softening makes the self term exactly
+  zero; the branch's absence is intentional and load-bearing for the lanes.
+- **Padding invariant (RFC §3.2).** In the SoA build every slot at index ≥ `n`
+  has mass 0. Any code path that shrinks `n` (i.e. merging's swap-remove) must
+  re-zero the vacated slot, or an invisible ghost particle keeps pulling.
+  Likewise, `ax`/`ay` beyond `n` must be zero if Phase B streams to `n_padded`.
+- **Lane width comes from `std.simd.suggestVectorLength(f32)`** (4 here on
+  NEON, 8 on AVX2). Hard-coding 8 is non-compliant; kernels take `L` as a
+  comptime parameter.
+- **Benchmarks:** `ReleaseFast`, `merging = false`, timing around **Phase A
+  only**, in ns/tick, with the seed and full config recorded. Never FPS.
+- **Scalar-vs-SIMD comparison is tolerance-based, never bitwise** — `@reduce`
+  reorders the summation, and the system is chaotic. Compare over a short
+  horizon plus the conservation invariants.
+
+## Working style here
+
+- Update the README status checklist as parts land. Nothing is claimed as
+  working before its test passes; report failures with the output.
+- Prefer conservation-law tests (momentum, centre-of-mass drift, energy,
+  determinism) over eyeballing trajectories.
+- Repository hygiene comes first on new work: scaffolding, README, and build
+  wiring land before implementation code.
+- Do not commit unless asked.

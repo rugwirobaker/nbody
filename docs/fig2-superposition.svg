@@ -1,0 +1,91 @@
+<svg viewBox="0 0 760 440" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+  <defs>
+    <marker id="src" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b7480"/>
+    </marker>
+    <marker id="net" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c8752f"/>
+    </marker>
+    <marker id="ax2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a929c"/>
+    </marker>
+    <style>
+      .ink{fill:#2b2f36;} .muted{fill:#5b6470;}
+      .axis{stroke:#8a929c;stroke-width:1.1;}
+      .grid{stroke:#e4e8ee;stroke-width:1;}
+      .src{stroke:#6b7480;stroke-width:1.5;fill:none;}
+      .netv{stroke:#c8752f;stroke-width:3;fill:none;}
+      .ptc{fill:#e7eef5;stroke:#9db6cf;stroke-width:1.2;}
+      .pti{fill:#fbeee2;stroke:#d8955b;stroke-width:1.7;}
+      .plbl{font-size:10px;font-style:italic;}
+    </style>
+  </defs>
+
+  <text x="24" y="30" class="ink" font-size="15" font-weight="700">Figure 2 — Superposition: the net acceleration on particle i (Step 7)</text>
+  <text x="24" y="48" class="muted" font-size="11">Same scene as Fig 0. Left: each source pulls i (arrow length &#8733; m/d&#178;). Right: the identical vectors added tip-to-tail.</text>
+
+  <!-- ============ LEFT PANEL ============ -->
+  <text x="70" y="78" class="muted" font-size="11" font-weight="700">Individual pulls on i</text>
+  <g class="grid">
+    <line x1="97" y1="90" x2="97" y2="360"/><line x1="151" y1="90" x2="151" y2="360"/>
+    <line x1="205" y1="90" x2="205" y2="360"/><line x1="259" y1="90" x2="259" y2="360"/><line x1="313" y1="90" x2="313" y2="360"/>
+    <line x1="70" y1="117" x2="340" y2="117"/><line x1="70" y1="171" x2="340" y2="171"/>
+    <line x1="70" y1="225" x2="340" y2="225"/><line x1="70" y1="279" x2="340" y2="279"/><line x1="70" y1="333" x2="340" y2="333"/>
+  </g>
+  <line class="axis" x1="70" y1="360" x2="350" y2="360" marker-end="url(#ax2)"/>
+  <line class="axis" x1="70" y1="360" x2="70" y2="86" marker-end="url(#ax2)"/>
+
+  <!-- faint source dots -->
+  <g text-anchor="middle" font-size="9" fill="#8a929c" class="plbl">
+    <circle cx="129" cy="133" r="7" fill="#f0f3f7" stroke="#c4ccd6" stroke-width="1"/><text x="129" y="136">a</text>
+    <circle cx="302" cy="166" r="7" fill="#f0f3f7" stroke="#c4ccd6" stroke-width="1"/><text x="302" y="169">b</text>
+    <circle cx="281" cy="252" r="7" fill="#f0f3f7" stroke="#c4ccd6" stroke-width="1"/><text x="281" y="255">c</text>
+    <circle cx="205" cy="317" r="7" fill="#f0f3f7" stroke="#c4ccd6" stroke-width="1"/><text x="205" y="320">d</text>
+    <circle cx="108" cy="209" r="7" fill="#f0f3f7" stroke="#c4ccd6" stroke-width="1"/><text x="108" y="212">e</text>
+  </g>
+  <!-- individual pull arrows (physically scaled) -->
+  <line class="src" x1="151" y1="279" x2="144" y2="231" marker-end="url(#src)"/>
+  <line class="src" x1="151" y1="279" x2="172" y2="263" marker-end="url(#src)"/>
+  <line class="src" x1="151" y1="279" x2="216" y2="265" marker-end="url(#src)"/>
+  <line class="src" x1="151" y1="279" x2="217" y2="325" marker-end="url(#src)"/>
+  <line class="src" x1="151" y1="279" x2="97"  y2="191" marker-end="url(#src)"/>
+  <circle class="pti" cx="151" cy="279" r="10"/><text x="151" y="283" class="ink plbl" text-anchor="middle">i</text>
+
+  <!-- divider -->
+  <line x1="390" y1="70" x2="390" y2="380" stroke="#d5dbe3" stroke-width="1" stroke-dasharray="3 4"/>
+
+  <!-- ============ RIGHT PANEL ============ -->
+  <text x="430" y="78" class="muted" font-size="11" font-weight="700">Tip-to-tail sum = net</text>
+  <g class="grid">
+    <line x1="457" y1="90" x2="457" y2="360"/><line x1="511" y1="90" x2="511" y2="360"/>
+    <line x1="565" y1="90" x2="565" y2="360"/><line x1="619" y1="90" x2="619" y2="360"/><line x1="673" y1="90" x2="673" y2="360"/>
+    <line x1="430" y1="117" x2="700" y2="117"/><line x1="430" y1="171" x2="700" y2="171"/>
+    <line x1="430" y1="225" x2="700" y2="225"/><line x1="430" y1="279" x2="700" y2="279"/><line x1="430" y1="333" x2="700" y2="333"/>
+  </g>
+  <line class="axis" x1="430" y1="360" x2="710" y2="360" marker-end="url(#ax2)"/>
+  <line class="axis" x1="430" y1="360" x2="430" y2="86" marker-end="url(#ax2)"/>
+
+  <!-- tip-to-tail chain (physically exact, computed) -->
+  <line class="src" x1="511" y1="279" x2="504" y2="231" marker-end="url(#src)"/>
+  <line class="src" x1="504" y1="231" x2="525" y2="215" marker-end="url(#src)"/>
+  <line class="src" x1="525" y1="215" x2="590" y2="202" marker-end="url(#src)"/>
+  <line class="src" x1="590" y1="202" x2="656" y2="248" marker-end="url(#src)"/>
+  <line class="src" x1="656" y1="248" x2="602" y2="160" marker-end="url(#src)"/>
+  <!-- net -->
+  <line class="netv" x1="511" y1="279" x2="602" y2="160" marker-end="url(#net)"/>
+  <circle class="pti" cx="511" cy="279" r="10"/><text x="511" y="283" class="ink plbl" text-anchor="middle">i</text>
+  <g fill="#c8752f" font-weight="700">
+    <text x="612" y="150" font-size="12">a<tspan font-size="9" dy="3">i</tspan><tspan dy="-3"> (net)</tspan></text>
+    <line x1="612" y1="137" x2="623" y2="137" stroke="#c8752f" stroke-width="1.1"/>
+    <path d="M623,137 l-3,-1.9 M623,137 l-3,1.9" stroke="#c8752f" stroke-width="1.1" fill="none"/>
+  </g>
+
+  <!-- formula band -->
+  <rect x="70" y="392" width="630" height="40" rx="6" fill="#f4f6f9" stroke="#c4ccd6" stroke-width="1"/>
+  <g class="ink" font-style="italic">
+    <text x="270" y="416" font-size="14" text-anchor="start">a<tspan font-size="10" dy="4">i</tspan><tspan dy="-4"> = &#931;</tspan><tspan font-size="10" dy="4">s&#8800;i</tspan><tspan dy="-4"> a</tspan><tspan font-size="10" dy="4">i&#8592;s</tspan></text>
+    <line x1="270" y1="402" x2="280" y2="402" stroke="#2b2f36" stroke-width="1.1"/>
+    <path d="M280,402 l-3,-1.9 M280,402 l-3,1.9" stroke="#2b2f36" stroke-width="1.1" fill="none"/>
+  </g>
+  <text x="470" y="416" class="muted" font-size="10" text-anchor="middle">n &#215; (n&#8722;1) pulls per tick &#8594; O(n&#178;), the computational shadow of superposition</text>
+</svg>
