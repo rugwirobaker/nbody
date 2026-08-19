@@ -82,11 +82,12 @@ performance.
   read that output and what to look for.
 
   Part 3 measured this from the other side and confirmed it: the SIMD kernel at
-  `L` = 1 runs **0.73×** the baseline — i.e. slower — because the baseline is
+  `L` = 1 runs **0.74×** the baseline — i.e. slower — because the baseline is
   not truly 1-wide. Against that honest 1-wide floor the native `L` = 4 kernel
-  reaches 3.98×, essentially the theoretical ceiling; against the SLP-paired
-  baseline it reaches 2.92×. **Quote 2.92×.** The larger number measures
-  vectorization against a strawman nobody would write.
+  reaches ~3.96×, essentially the theoretical ceiling; against the SLP-paired
+  baseline it reaches **~2.9×**. **Quote ~2.9×.** The larger number measures
+  vectorization against a strawman nobody would write. Run-to-run variation is
+  a percent or two, so do not quote a third significant digit.
 - **What the SIMD kernel's disassembly shows** (aarch64, ReleaseFast, verified
   2026-08-19). Exactly what RFC §3.3c specifies: **three vector loads (`ldr q`)
   and zero stores per inner iteration**, all fourteen operations in `.4s` form

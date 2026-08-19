@@ -83,9 +83,9 @@
   <!-- formula band -->
   <rect x="70" y="392" width="630" height="40" rx="6" fill="#f4f6f9" stroke="#c4ccd6" stroke-width="1"/>
   <g class="ink" font-style="italic">
-    <text x="270" y="416" font-size="14" text-anchor="start">a<tspan font-size="10" dy="4">i</tspan><tspan dy="-4"> = &#931;</tspan><tspan font-size="10" dy="4">s&#8800;i</tspan><tspan dy="-4"> a</tspan><tspan font-size="10" dy="4">i&#8592;s</tspan></text>
-    <line x1="270" y1="402" x2="280" y2="402" stroke="#2b2f36" stroke-width="1.1"/>
-    <path d="M280,402 l-3,-1.9 M280,402 l-3,1.9" stroke="#2b2f36" stroke-width="1.1" fill="none"/>
+    <text x="90" y="416" font-size="14" text-anchor="start">a<tspan font-size="10" dy="4">i</tspan><tspan dy="-4"> = &#931;</tspan><tspan font-size="10" dy="4">s&#8800;i</tspan><tspan dy="-4"> a</tspan><tspan font-size="10" dy="4">i&#8592;s</tspan></text>
+    <line x1="90" y1="402" x2="100" y2="402" stroke="#2b2f36" stroke-width="1.1"/>
+    <path d="M100,402 l-3,-1.9 M100,402 l-3,1.9" stroke="#2b2f36" stroke-width="1.1" fill="none"/>
   </g>
-  <text x="470" y="416" class="muted" font-size="10" text-anchor="middle">n &#215; (n&#8722;1) pulls per tick &#8594; O(n&#178;), the computational shadow of superposition</text>
+  <text x="684" y="416" class="muted" font-size="10" text-anchor="end">n &#215; (n&#8722;1) pulls per tick &#8594; O(n&#178;), the computational shadow of superposition</text>
 </svg>
