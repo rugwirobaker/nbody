@@ -12,16 +12,39 @@ const std = @import("std");
 const builtin = @import("builtin");
 const nbody = @import("nbody");
 
-/// Sized so the n² work spans a couple of orders of magnitude and crosses the
-/// cache levels — the ns/pair column is what shows that happening.
-const default_sweep = [_]usize{ 512, 1024, 2048, 4096, 8192 };
+/// Spans two and a half orders of magnitude in n, so the ns/pair column has a
+/// chance to show both ends of the curve.
+///
+/// The small rows are not filler. Part 3's Variant A does two `@reduce` calls
+/// per row, amortized over only n/L inner iterations, so SIMD's advantage is
+/// at its *smallest* here — dropping them would hide the one part of the sweep
+/// where the horizontal reduction is visible in the cost.
+///
+/// The top end reaches for the cache cliff. AoS streams 24n bytes per row, so
+/// n = 16384 is ~390 KB and well past L1 — worth noting that at 8192 (~196 KB)
+/// nothing had bent yet, so the claim that ns/pair rises when the working set
+/// leaves cache is still owed a demonstration on this hardware.
+const default_sweep = [_]usize{ 256, 512, 1024, 2048, 4096, 8192, 16384 };
 
 /// Stop a measurement once Phase A has accumulated this much time...
 const target_ns: i96 = 100 * std.time.ns_per_ms;
-/// ...or this many ticks, whichever comes first. Small n hits the tick cap,
-/// large n hits the time budget.
-const max_ticks: usize = 200;
+/// ...or this many ticks, whichever comes first.
+///
+/// `max_ticks` is a runaway guard, not a target: **every row should stop on
+/// the time budget**, so that each n gets the same amount of measurement. It
+/// was 200, which silently capped the small-n rows — n = 512 needs ~350 ticks
+/// to reach 100 ms, so it was being cut off at 57 ms while every other row got
+/// the full budget, and that row's ns/pair duly swung 1.09–1.60 across runs.
+/// If a row ever reports exactly `max_ticks`, its number is undermeasured and
+/// this constant is too low.
+const max_ticks: usize = 2000;
 const min_ticks: usize = 5;
+
+/// Discarded work before the first measurement, to get the CPU off its idle
+/// clock. Per-row warmup ticks are not enough for this: three ticks at n = 512
+/// is under a millisecond, so without this the first row in the sweep pays for
+/// the frequency ramp and reads slow.
+const warmup_ns: i96 = 300 * std.time.ns_per_ms;
 
 const Result = struct {
     n: usize,
@@ -65,6 +88,8 @@ pub fn main(init: std.process.Init) !void {
         base.mass_min, base.mass_max, base.radius, base.jitter,
     });
 
+    try warmUp(gpa, init.io, base);
+
     try out.print("  {s:>8}  {s:>7}  {s:>14}  {s:>10}\n", .{ "n", "ticks", "ns/tick", "ns/pair" });
     try out.print("  {s:>8}  {s:>7}  {s:>14}  {s:>10}\n", .{ "--------", "-------", "--------------", "----------" });
     try out.flush();
@@ -78,12 +103,40 @@ pub fn main(init: std.process.Init) !void {
     }
 
     try out.print("\n  ns/pair = ns/tick / n². Flat across n means the kernel is\n", .{});
-    try out.print("  compute-bound; the rise at large n is the working set leaving cache.\n", .{});
+    try out.print("  compute-bound — and on this hardware it is flat all the way:\n", .{});
+    try out.print("  no cache cliff appears even at n = 16384, where each row\n", .{});
+    try out.print("  streams ~390 KB of AoS particles. The access pattern is pure\n", .{});
+    try out.print("  sequential and the per-pair sqrt+div leaves the prefetcher\n", .{});
+    try out.print("  ample time, so memory never becomes the limiter.\n", .{});
     if (builtin.mode != .ReleaseFast) {
         try out.print("\n  WARNING: this build is {s}. These numbers measure register\n", .{@tagName(builtin.mode)});
         try out.print("  spills, not the algorithm (RFC §2.5 rule 1, §3.3c).\n", .{});
     }
     try out.flush();
+}
+
+/// Runs real Phase-A work for `warmup_ns` and throws the result away, so the
+/// CPU is at its sustained clock before the first row is timed.
+///
+/// This measures nothing and asserts nothing. It exists because the first
+/// entry in a sweep is otherwise systematically slower than the rest — an
+/// artefact of the machine, not of n, and one that would show up as a bogus
+/// bend at the small-n end of the curve.
+fn warmUp(gpa: std.mem.Allocator, io: std.Io, base: nbody.Config) !void {
+    const cfg = blk: {
+        var c = base;
+        c.n = 2048;
+        break :blk c;
+    };
+
+    var sim = try nbody.Sim.initSeeded(gpa, cfg);
+    defer sim.deinit(gpa);
+
+    const start = std.Io.Timestamp.now(io, .awake);
+    while (start.durationTo(std.Io.Timestamp.now(io, .awake)).toNanoseconds() < warmup_ns) {
+        nbody.scalar.computeAccelerations(&sim, cfg);
+        nbody.scalar.integrate(&sim, cfg);
+    }
 }
 
 fn parseSweep(arena: std.mem.Allocator, args: []const [:0]const u8) ![]const usize {
