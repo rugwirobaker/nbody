@@ -25,7 +25,7 @@ off-limits, and every performance number is Phase-A nanoseconds per tick under
 | --- | --- | --- |
 | `nbody` | — | The core library: AoS + SoA layouts, scalar + SIMD kernels, `tick()`, presets, merging, conserved properties. Renderer-free, I/O-free. |
 | `nbody-bench` | `nbody` | The measurement harness: ns/tick vs n, both kernels, same seed. |
-| `nbody-viz` | `nbody`, raylib | The demo client. Not started — physics and measurement come first. |
+| `nbody-viz` | `nbody` | The demo client: a `wasm32-freestanding` build of the library plus a hand-written WebGL2 renderer. Runs both kernels side by side. |
 
 Dependencies point one way. The core library never learns about a screen.
 
@@ -67,10 +67,90 @@ Requires Zig 0.16.0.
 ```sh
 zig build test                          # library tests: the RFC's acceptance tests
 zig build bench -Doptimize=ReleaseFast  # the measurement harness
+zig build viz                           # the demo into zig-out/web
 ```
 
 Benchmarks in any mode other than `ReleaseFast` measure register spills rather
-than the algorithm, so the build warns about it.
+than the algorithm, so the build warns about it. The demo always builds
+`ReleaseFast` for the same reason: it reports Phase-A ns/tick, and a Debug wasm
+would report spills.
+
+The demo needs to be served over HTTP, because `fetch` refuses `file://`:
+
+```sh
+zig build viz && python3 -m http.server -d zig-out/web
+```
+
+## The demo
+
+`zig build viz` produces three files and no dependencies: a 25 KB
+`wasm32-freestanding` build of the library, one HTML page, and one JavaScript
+file holding the WebGL2 renderer. There is no emscripten in the toolchain and
+nothing in `build.zig.zon`. The library being renderer-free and I/O-free is
+what makes that possible — it imports `std.debug.assert`, `std.Random`, and an
+`Allocator`, all of which exist on freestanding wasm.
+
+The build targets `wasm32-freestanding+simd128`, which matters: without
+`simd128`, `std.simd.suggestVectorLength(f32)` returns null and the SIMD kernel
+falls back to an 8-wide vector that wasm emulates. With it the target reports
+4, the same width as NEON, so the page runs the real Part 3 kernel.
+
+Three modes, chosen in the page or the URL:
+
+| Mode | What it shows |
+| --- | --- |
+| `base` | the scalar AoS baseline alone |
+| `simd` | the SoA vector kernel alone |
+| `stacked` | both at once, base left and simd right |
+
+Both worlds are seeded through `Particles.fromAoS`, so they start
+bit-identical and any divergence you see between the panels is `@reduce`
+reordering amplified by a chaotic system (RFC §3.5), not two seeding paths.
+
+The configuration lives in the URL —
+`?n=4096&seed=0xC0FFEE&preset=disk&merging=1&mode=stacked` — and the controls
+write to it, so a link reproduces a run exactly. That is the same reason
+`nbody-bench` prints the seed and full config above every table.
+
+The page opens paused. Space or the button starts it.
+
+Each panel reports **Phase-A ns/tick**, never FPS (RFC §2.5 rule 2), and a
+simulated clock. The clock is where the comparison shows: each world is given
+a share of wall clock per frame rather than a tick quota, so the faster kernel
+fits more ticks into its share and its clock pulls ahead. At the default
+n = 1000, simd finishes the ten ticks §2.4 allows while base does not, and the
+two clocks separate about 2.5×.
+
+That default is chosen, not arbitrary. Below n ≈ 750 neither kernel is stressed
+and the panels run in lockstep; above n ≈ 1400 both are starved and the whole
+thing crawls at hundreds of real seconds per orbit.
+
+### Two demo constants differ from `Config`'s defaults
+
+Both were measured rather than guessed, and both exist because the library
+defaults make merging destroy the simulation within a second.
+
+| | `Config` | demo | why |
+| --- | --- | --- | --- |
+| `d_merge2` | 5e-4 | 5e-6 | The default merge radius is 0.0224 against a mean nearest-neighbour spacing of 0.0198, so at t = 0 nearly every particle is already touching one. Its merge discs cover 25 % of the disk. |
+| `dt` | 1e-3 | 2.5e-4 | The default resolves ~6,300 ticks per orbit. That is not enough to integrate the close encounters merging creates. |
+
+Measured over 8,000 ticks at the library defaults with merging on, 85 % of the
+population merges in the first 500 ticks and total energy runs from −992 to
+positive: the system crosses from bound to unbound and the survivors leave.
+RFC Step 10 banks a merged pair's destroyed kinetic energy into `heat` and the
+pair's mutual potential simply vanishes, so every merge steps total energy up —
+an effect `AGENTS.md` already records at ~0.3 % per merge, compounded here
+about 1,975 times.
+
+At the demo's constants the same run holds energy to within 7 %, `n` decays
+smoothly instead of collapsing, and the disk stays framed:
+
+```
+                        tick      n  merges   E/E0  r_p90
+library defaults        4000     25    1975  0.323  2.459
+demo constants          4000    306    1694  0.895  0.831
+```
 
 ## What the baseline compiles to
 
@@ -279,7 +359,8 @@ Nothing below is claimed until its test passes.
       `L`, padding invariants including the ghost-particle trap
 - [x] Scalar-vs-SIMD short-horizon agreement + two-kernel benchmark sweep and
       the lane-width experiment
-- [ ] `nbody-viz` (raylib)
+- [x] `nbody-viz` — wasm + WebGL2, with `base` / `simd` / `stacked` modes and
+      Phase-A ns/tick reported per panel
 
 One caveat on what the green suite proves. RFC test (d) says
 `KE + PE + Σheat` holds constant across merges; it doesn't, quite. Step 10
