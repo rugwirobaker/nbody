@@ -248,15 +248,58 @@ The three constants hoisted before our loop are `0x3a83126f` = `dt` (1e-3),
 
 When Phase A changes, two questions and nothing else:
 
-1. **Is the scalar baseline still one source per iteration?** Find the
-   `fsqrt`. If it ever reads `fsqrt.4s`, or if there are several `fsqrt` in
-   one loop body, LLVM widened the baseline and the comparison is dishonest —
-   fix it or record it.
+1. **Is the scalar baseline still one source per iteration?** Find its
+   `fsqrt`. Note that since Part 3 landed, **the binary legitimately contains
+   `fsqrt.4s`** — that is the SIMD kernel, and grepping the whole file will
+   find it. This is the histogram trap above, so locate the scalar loop first
+   and read only that: if *its* sqrt ever becomes `.4s`, or several appear in
+   one loop body, LLVM widened the baseline and the comparison is dishonest.
 2. **Does the SIMD kernel show `.4s` everywhere and no stack traffic?** RFC
    §3.3c: three vector loads, zero stores per iteration, all intermediates in
    registers. `str`/`ldr` against `sp` inside the inner loop means spills —
    investigate rather than shrug.
 
-For Part 3, the instructions to expect: `dup.4s` (that's `@splat`), `ldr q…`
-(the 128-bit vector loads SoA makes contiguous), the fourteen operations in
-`.4s` form, and `faddp`/`addv` at the row bottom (that's `@reduce`).
+## 8. What Part 3 actually emitted
+
+The prediction was `dup.4s`, `ldr q…`, the fourteen operations in `.4s`, and a
+`faddp`/`addv` at the row bottom. Most of it held:
+
+```
+ldr     q4, [x10], #0x10   ; three vector loads — x, y, mass
+ldr     q5, [x11], #0x10   ;   post-index 0x10 = 16 bytes = 4 f32
+ldr     q6, [x12], #0x10
+fsub.4s v4, v4, v1         ; dx — v1 holds the broadcast x_i
+fsub.4s v5, v5, v3         ; dy
+fmul.4s v7, v4, v4         ; the same fourteen operations as the
+fmul.4s v16, v5, v5        ;   scalar loop, four pairs at a time
+fadd.4s v7, v7, v16
+fadd.4s v7, v7, v18        ; + eps2
+fsqrt.4s v16, v7           ; now a vector sqrt
+fmul.4s v7, v7, v16
+fdiv.4s v7, v17, v7        ; and a vector divide
+fmul.4s v6, v6, v18
+fmul.4s v6, v6, v7
+fmul.4s v4, v4, v6
+fadd.4s v2, v2, v4         ; lane accumulators
+fmul.4s v4, v5, v6
+fadd.4s v0, v0, v4
+add     x9, x9, #0x4       ; j += L
+b.lo    <top>
+```
+
+**Three vector loads, zero stores, no stack traffic** — §3.3c's contract, met
+exactly. Every intermediate stayed in a register.
+
+Two things differed from the prediction, both for good reasons, and both worth
+recognizing when you read your own kernels:
+
+- **No `dup.4s` in the loop.** The broadcasts were hoisted above it into `v1`,
+  `v3`, `v17` and `v18`. That is the "broadcast once per row" design showing up
+  in the instruction schedule rather than in the loop body — the splat happens
+  once per row, not once per iteration, which is the whole point of Variant A.
+- **No `faddp`/`addv` either.** The `@reduce` lives in the row epilogue,
+  outside this listing, executed once per row. Finding a horizontal op *inside*
+  an inner loop is usually a sign something is being reduced too often.
+
+Note `v18` doing double duty as both `eps2` and `g` — the same constant-merging
+trap described in §6, since both are `5.0e-4` by default.

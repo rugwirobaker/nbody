@@ -24,6 +24,10 @@ pub const Sim = sim.Sim;
 pub const seed = @import("seed.zig");
 pub const scalar = @import("scalar.zig");
 pub const merge = @import("merge.zig");
+
+/// RFC Part 3: the SIMD build — SoA layout and vector kernels.
+pub const simd = @import("simd.zig");
+pub const Particles = simd.Particles;
 pub const properties = @import("properties.zig");
 
 test {
@@ -31,4 +35,5 @@ test {
     // The RFC §2.5 acceptance tests. Imported only in the test build so they
     // never enter the library's public surface.
     _ = @import("acceptance_test.zig");
+    _ = @import("simd_test.zig");
 }

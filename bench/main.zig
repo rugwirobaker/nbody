@@ -53,6 +53,18 @@ const Result = struct {
     ns_per_pair: f64,
 };
 
+/// Which kernel a measurement is of.
+///
+/// A harness axis, deliberately **not** a `Config` field. RFC §3.5 binds the
+/// comparison to "same config and seed", so the one thing being measured must
+/// not be part of what is held equal. Both kernels also run in this one
+/// process, one compiler invocation, one thermal state — two separately-built
+/// binaries would add a variable for no benefit.
+const Kernel = enum { scalar, simd };
+
+/// Lane width for the main sweep: the target's natural vector size.
+const lanes = nbody.simd.default_lanes;
+
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
     const gpa = init.gpa;
@@ -74,13 +86,13 @@ pub fn main(init: std.process.Init) !void {
         return error.InvalidConfig;
     }
 
-    try out.print("nbody-bench — scalar baseline (RFC Part 2)\n\n", .{});
+    try out.print("nbody-bench — scalar baseline vs SIMD (RFC Parts 2–3)\n\n", .{});
     try out.print("  target      {s}-{s}\n", .{ @tagName(builtin.cpu.arch), @tagName(builtin.os.tag) });
     try out.print("  optimize    {s}{s}\n", .{
         @tagName(builtin.mode),
         if (builtin.mode == .ReleaseFast) "" else "  (RFC §2.5: measurements require ReleaseFast)",
     });
-    try out.print("  lane count  {d} (f32, unused by the scalar baseline)\n", .{nbody.lane_count});
+    try out.print("  lane count  {d} (f32; scalar baseline does not use it)\n", .{nbody.lane_count});
     try out.print("  seed        0x{X}\n", .{base.seed});
     try out.print("  preset      {s}, merging {}\n", .{ @tagName(base.preset), base.merging });
     try out.print("  g/dt/eps2   {d} / {d} / {d}\n", .{ base.g, base.dt, base.eps2 });
@@ -90,16 +102,47 @@ pub fn main(init: std.process.Init) !void {
 
     try warmUp(gpa, init.io, base);
 
-    try out.print("  {s:>8}  {s:>7}  {s:>14}  {s:>10}\n", .{ "n", "ticks", "ns/tick", "ns/pair" });
-    try out.print("  {s:>8}  {s:>7}  {s:>14}  {s:>10}\n", .{ "--------", "-------", "--------------", "----------" });
+    try out.print("  Phase A only, ns/tick. Both kernels seeded from the same AoS sim.\n\n", .{});
+    try out.print("  {s:>8}  {s:>15}  {s:>15}  {s:>9}  {s:>9}\n", .{
+        "n", "scalar ns/tick", "simd ns/tick", "simd/pair", "speedup",
+    });
+    try out.print("  {s:>8}  {s:>15}  {s:>15}  {s:>9}  {s:>9}\n", .{
+        "--------", "---------------", "---------------", "---------", "---------",
+    });
     try out.flush();
 
     for (sweep) |n| {
-        const r = try measure(gpa, init.io, base, n);
-        try out.print("  {d:>8}  {d:>7}  {d:>14.1}  {d:>10.3}\n", .{
-            r.n, r.ticks, r.ns_per_tick, r.ns_per_pair,
+        const s_row = try measure(.scalar, lanes, gpa, init.io, base, n);
+        const v_row = try measure(.simd, lanes, gpa, init.io, base, n);
+        try out.print("  {d:>8}  {d:>15.1}  {d:>15.1}  {d:>9.3}  {d:>8.2}x\n", .{
+            n,                                     s_row.ns_per_tick, v_row.ns_per_tick, v_row.ns_per_pair,
+            s_row.ns_per_tick / v_row.ns_per_tick,
         });
         try out.flush(); // a long sweep should report as it goes
+    }
+
+    // ---- labeled experiment: lane width ----
+    //
+    // RFC §3.2 requires the kernel be parameterized by L rather than hard-coded,
+    // which makes this measurable rather than theoretical. Widths above the
+    // hardware's native vector size are legal Zig — @Vector lowers them by
+    // splitting into multiple registers — so this shows where widening stops
+    // paying on 4-wide NEON.
+    const experiment_n: usize = 4096;
+    try out.print("\n  Lane-width experiment (labeled, non-normative), n = {d}:\n\n", .{experiment_n});
+    try out.print("  {s:>8}  {s:>15}  {s:>9}\n", .{ "L", "simd ns/tick", "speedup" });
+    try out.print("  {s:>8}  {s:>15}  {s:>9}\n", .{ "--------", "---------------", "---------" });
+
+    const baseline = try measure(.scalar, lanes, gpa, init.io, base, experiment_n);
+    inline for (.{ 1, 2, 4, 8, 16 }) |experiment_lanes| {
+        const row = try measure(.simd, experiment_lanes, gpa, init.io, base, experiment_n);
+        try out.print("  {d:>8}  {d:>15.1}  {d:>8.2}x{s}\n", .{
+            experiment_lanes,
+            row.ns_per_tick,
+            baseline.ns_per_tick / row.ns_per_tick,
+            if (experiment_lanes == nbody.lane_count) "  <- native" else "",
+        });
+        try out.flush();
     }
 
     try out.print("\n  ns/pair = ns/tick / n². Flat across n means the kernel is\n", .{});
@@ -155,29 +198,53 @@ fn parseSweep(arena: std.mem.Allocator, args: []const [:0]const u8) ![]const usi
 /// simulation that is actually advancing, or Phase A would re-read one
 /// unchanging position snapshot tick after tick and report a cache behaviour
 /// that no real run has.
-fn measure(gpa: std.mem.Allocator, io: std.Io, base: nbody.Config, n: usize) !Result {
+fn measure(
+    comptime kernel: Kernel,
+    comptime L: usize,
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    base: nbody.Config,
+    n: usize,
+) !Result {
     const cfg = blk: {
         var c = base;
         c.n = n;
         break :blk c;
     };
 
+    // Both kernels are seeded from the same AoS sim, so they measure identical
+    // initial conditions rather than two seeding paths that merely look alike.
     var sim = try nbody.Sim.initSeeded(gpa, cfg);
     defer sim.deinit(gpa);
 
+    var particles: nbody.simd.Particles = if (kernel == .simd)
+        try nbody.simd.Particles.fromAoS(gpa, sim, L)
+    else
+        undefined;
+    defer if (kernel == .simd) particles.deinit(gpa);
+
     // Warmup: fault in the pages and let the clocks settle before anything is
     // recorded.
-    for (0..3) |_| nbody.scalar.tick(&sim, cfg);
+    for (0..3) |_| switch (kernel) {
+        .scalar => nbody.scalar.tick(&sim, cfg),
+        .simd => nbody.simd.tick(L, &particles, cfg),
+    };
 
     var total_ns: i96 = 0;
     var ticks: usize = 0;
     while (ticks < max_ticks and (ticks < min_ticks or total_ns < target_ns)) : (ticks += 1) {
         const t0 = std.Io.Timestamp.now(io, .awake);
-        nbody.scalar.computeAccelerations(&sim, cfg);
+        switch (kernel) {
+            .scalar => nbody.scalar.computeAccelerations(&sim, cfg),
+            .simd => nbody.simd.computeAccelerations(L, &particles, cfg),
+        }
         const t1 = std.Io.Timestamp.now(io, .awake);
         total_ns += t0.durationTo(t1).toNanoseconds();
 
-        nbody.scalar.integrate(&sim, cfg);
+        switch (kernel) {
+            .scalar => nbody.scalar.integrate(&sim, cfg),
+            .simd => nbody.simd.integrate(L, &particles, cfg),
+        }
     }
 
     const ns_per_tick = @as(f64, @floatFromInt(total_ns)) / @as(f64, @floatFromInt(ticks));

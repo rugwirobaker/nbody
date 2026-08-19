@@ -80,6 +80,21 @@ performance.
   baseline already gets 2-wide on the cheap component math. Zig 0.16 exposes no
   flag to disable the vectorizer. `docs/disassembly.md` explains how to
   read that output and what to look for.
+
+  Part 3 measured this from the other side and confirmed it: the SIMD kernel at
+  `L` = 1 runs **0.73×** the baseline — i.e. slower — because the baseline is
+  not truly 1-wide. Against that honest 1-wide floor the native `L` = 4 kernel
+  reaches 3.98×, essentially the theoretical ceiling; against the SLP-paired
+  baseline it reaches 2.92×. **Quote 2.92×.** The larger number measures
+  vectorization against a strawman nobody would write.
+- **What the SIMD kernel's disassembly shows** (aarch64, ReleaseFast, verified
+  2026-08-19). Exactly what RFC §3.3c specifies: **three vector loads (`ldr q`)
+  and zero stores per inner iteration**, all fourteen operations in `.4s` form
+  including `fsqrt.4s` and `fdiv.4s`, `j += 4`, and no stack traffic — every
+  intermediate stayed in registers. The `@splat`s are hoisted out of the inner
+  loop entirely, so each broadcast happens once per row as designed. If a future
+  change introduces `str`/`ldr` against `sp` inside that loop, the register
+  allocator is spilling and the §3.3c contract is broken.
 - **Both builds run the same algorithm.** Same force law, same integration
   order, same **ordered**-pair n² traversal. Do not apply the pairwise-symmetry
   halving (RFC Step 6) to the baseline, even though it is a real optimization —

@@ -89,13 +89,50 @@ scalar" is the assumption the whole project rests on
   means the baseline already gets 2-wide on the cheap operations, which is
   worth remembering when reading the eventual speedup.
 
-## A note on lane width
+## Results
 
-The SIMD kernel is parameterized by `std.simd.suggestVectorLength(f32)` — 8 on
-AVX2, 16 on AVX-512, **4 on Apple Silicon / NEON**. On a 4-wide target the
-theoretical ceiling is 4×, so the RFC's "4–7× is success" figure (written for
-AVX2) becomes roughly 2.5–3.5× here. Hard-coding 8 is non-compliant; the
-harness sweeps lane width as a labeled experiment instead.
+Phase A only, `ReleaseFast`, aarch64 / NEON (`L` = 4), seed `0xC0FFEE`:
+
+| n | scalar ns/tick | simd ns/tick | speedup |
+| --- | --- | --- | --- |
+| 256 | 72,820 | 25,046 | 2.91× |
+| 1024 | 1,163,671 | 398,044 | 2.92× |
+| 4096 | 18,532,222 | 6,351,573 | 2.92× |
+| 16384 | 296,515,742 | 102,177,367 | 2.90× |
+
+**2.92×, flat across a 64× range in n.** Same algorithm, same force law, same
+ordered-pair n² traversal — only the memory layout and the instruction width
+differ.
+
+### Why 2.92× and not 4×
+
+The lane-width experiment answers this, and it is the most interesting table
+the harness prints:
+
+| L | simd ns/tick | speedup |
+| --- | --- | --- |
+| 1 | 25,199,650 | **0.73×** |
+| 2 | 12,646,765 | 1.46× |
+| 4 | 6,338,735 | 2.92× ← native |
+| 8 | 6,506,919 | 2.84× |
+| 16 | 6,222,993 | 2.97× |
+
+Each doubling of `L` buys almost exactly 2× — 1.99×, then 1.995× — until the
+hardware runs out of lanes at 4, after which widening buys nothing (`@Vector`
+just splits into more registers). That is as clean as this kind of scaling ever
+gets.
+
+The striking row is `L` = 1, which is **slower than the "scalar" baseline**.
+That is not a defect; it is the SLP finding below, measured from the other
+side. The baseline is not truly 1-wide — LLVM pairs its `ax`/`ay` chains into
+2-wide NEON — so a genuinely 1-wide kernel loses to it by roughly the factor
+you would expect. Against that honest 1-wide floor, the native kernel runs
+**3.98×**, essentially the theoretical ceiling for 4 lanes.
+
+Both numbers are true and they measure different things: 3.98× is what the
+vectorization achieves, 2.92× is what it achieves *over code a reasonable
+engineer would actually write*. The second is the one worth quoting, and
+publishing only the first is exactly the cheat this project was built to avoid.
 
 ## Status
 
@@ -112,8 +149,10 @@ Nothing below is claimed until its test passes.
       restart, swap-remove
 - [x] Tests (b)–(e) in their merging-on forms: momentum and total mass across
       merge events, CoM drift, determinism, and the single-merge energy ledger
-- [ ] Part 3 — SoA layout, SIMD kernels, padding invariants
-- [ ] Scalar-vs-SIMD short-horizon agreement + two-kernel benchmark sweep
+- [x] Part 3 — SoA layout with `n_padded`, `@Vector` kernels parameterized by
+      `L`, padding invariants including the ghost-particle trap
+- [x] Scalar-vs-SIMD short-horizon agreement + two-kernel benchmark sweep and
+      the lane-width experiment
 - [ ] `nbody-viz` (raylib)
 
 One caveat on what the green suite proves. RFC test (d) says
