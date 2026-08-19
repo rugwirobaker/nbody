@@ -72,22 +72,21 @@ performance.
   verified 2026-08-19). The protection worked: `computeAccelerations` consumes
   **one source per iteration**, with a scalar `fsqrt s` and `fdiv s` per pair —
   strict FP kept LLVM from reordering the `ax +=` reduction across iterations,
-  so the n² traversal is intact. What LLVM *did* do is SLP-pair the two
-  independent accumulators, emitting `fsub.2s` / `fmul.2s` / `faddp.2s` /
-  `fadd.2s` for the x and y component arithmetic. That is not a reordering of
-  any one reduction, so no rule forbids it, and it is what the natural code
-  honestly compiles to. Note the consequence when reading speedups: the
-  baseline already gets 2-wide on the cheap component math. Zig 0.16 exposes no
-  flag to disable the vectorizer. `docs/disassembly.md` explains how to
-  read that output and what to look for.
+  so the n² traversal is intact. LLVM does SLP-pair the two independent
+  accumulators, emitting `fsub.2s` / `fmul.2s` / `faddp.2s` / `fadd.2s` for the
+  x and y component arithmetic. Each accumulator is still summed in order, so
+  this is what the natural code compiles to, and Zig 0.16 exposes no flag to
+  disable the vectorizer anyway. The consequence for speedups: the baseline
+  already gets 2-wide on the cheap component math. `docs/disassembly.md`
+  explains how to read that output and what to look for.
 
-  Part 3 measured this from the other side and confirmed it: the SIMD kernel at
-  `L` = 1 runs **0.74×** the baseline — i.e. slower — because the baseline is
-  not truly 1-wide. Against that honest 1-wide floor the native `L` = 4 kernel
-  reaches ~3.96×, essentially the theoretical ceiling; against the SLP-paired
-  baseline it reaches **~2.9×**. **Quote ~2.9×.** The larger number measures
-  vectorization against a strawman nobody would write. Run-to-run variation is
-  a percent or two, so do not quote a third significant digit.
+  Part 3 confirmed this from the other side. The SIMD kernel at `L` = 1 runs
+  **0.74×** the baseline — slower — because the baseline is not 1-wide.
+  Measured against that 1-wide floor the native `L` = 4 kernel reaches ~3.96×,
+  close to the theoretical ceiling; measured against the SLP-paired baseline it
+  reaches **~2.9×**. **Quote ~2.9×**, which is the figure against code someone
+  would actually write. Run-to-run variation is a percent or two, so do not
+  quote a third significant digit.
 - **What the SIMD kernel's disassembly shows** (aarch64, ReleaseFast, verified
   2026-08-19). Exactly what RFC §3.3c specifies: **three vector loads (`ldr q`)
   and zero stores per inner iteration**, all fourteen operations in `.4s` form
@@ -109,14 +108,14 @@ performance.
   *new* velocity. The reverse ordering costs the same and pumps energy in.
 - **No `if (i != j)` in the inner loop.** Softening makes the self term exactly
   zero; the branch's absence is intentional and load-bearing for the lanes.
-- **Merging's energy books don't close, and that is expected** (verified
-  2026-08-19). RFC §2.5 test (d) claims `KE + PE + Σheat` stays constant across
-  merges. It cannot: Step 10 banks the destroyed *kinetic* energy into `heat`,
-  but the merged pair's mutual potential vanishes with the pair, stepping total
-  energy **up** by roughly 0.3 % per merge at default config. This is a gap in
-  the spec's wording, not a bug — do not "fix" it by loosening a tolerance
-  until the test passes, and do not fold the pair potential into `heat` without
-  the user's say-so, because Step 10 is normative about what `heat` holds. The
+- **Merging's energy books do not close** (verified 2026-08-19). RFC §2.5 test
+  (d) claims `KE + PE + Σheat` stays constant across merges. Step 10 banks the
+  destroyed *kinetic* energy into `heat` and leaves out the merged pair's
+  mutual potential, which vanishes with the pair and steps total energy **up**
+  by roughly 0.3 % per merge at default config. The spec's wording overstates
+  the invariant. Do not loosen a tolerance until the test passes, and do not
+  fold the pair potential into `heat` without the user's say-so, because Step
+  10 is normative about what `heat` holds. The
   tests split the claim instead: momentum, total mass and determinism are
   asserted sharply across merges; energy flatness only on merge-free ticks
   (which is why `mergeCollisions` returns a count); and the full ledger is

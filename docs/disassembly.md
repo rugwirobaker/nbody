@@ -199,14 +199,13 @@ one `fsqrt`, one `fdiv`. Strict FP is what bought this: `ax += s*dx` is a
 serial float reduction, and without fast-math LLVM may not reorder it across
 iterations. The protection RFC §3.3c asks for is working.
 
-**c) LLVM *did* pair the x and y components into 2-wide NEON.** `fsub.2s`,
-`fmul.2s`, `fmul.2s`, `fadd.2s`, plus a `faddp.2s` for `dx²+dy²`. This is the
-SLP vectorizer noticing that the `ax` and `ay` chains are two independent
-reductions and running them side by side — which is *not* a reordering of
-either one, so no rule forbids it. It is what the natural code honestly
-compiles to. But note the consequence: the baseline already gets 2-wide on the
-cheap component arithmetic, so the headline speedup is measured against a
-partly-widened control.
+**c) LLVM pairs the x and y components into 2-wide NEON.** `fsub.2s`,
+`fmul.2s`, `fmul.2s`, `fadd.2s`, plus a `faddp.2s` for `dx²+dy²`. The SLP
+vectorizer noticed that the `ax` and `ay` chains are two independent reductions
+and ran them side by side. Each chain is still summed in order, so this is what
+the natural code compiles to. The consequence: the baseline already gets 2-wide
+on the cheap component arithmetic, and the headline speedup is measured against
+a partly-widened control.
 
 ---
 
@@ -246,7 +245,7 @@ The three constants hoisted before our loop are `0x3a83126f` = `dt` (1e-3),
 
 ## 7. The checklist this exists to serve
 
-When Phase A changes, two questions and nothing else:
+When Phase A changes, there are two questions to answer:
 
 1. **Is the scalar baseline still one source per iteration?** Find its
    `fsqrt`. Note that since Part 3 landed, **the binary legitimately contains

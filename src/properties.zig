@@ -5,11 +5,11 @@
 //! do not systematically grow. These functions are what the acceptance tests
 //! measure.
 //!
-//! **Everything accumulates in f64.** That is not a physics change and not a
-//! fast-math violation: none of this is the measured kernel, and widening the
-//! accumulator keeps a test measuring the *algorithm's* conservation rather
-//! than the test's own summation error. A momentum sum over 10⁴ f32 particles
-//! loses more precision to the sum than the simulation loses to a tick.
+//! **Everything accumulates in f64.** None of this runs in the measured
+//! kernel, so the wider accumulator costs nothing that matters and keeps a
+//! test measuring the algorithm's conservation instead of its own summation
+//! error. A momentum sum over 10⁴ f32 particles loses more precision to the
+//! sum than the simulation loses to a tick.
 
 const std = @import("std");
 

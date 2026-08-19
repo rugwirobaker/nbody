@@ -3,21 +3,20 @@
 //! Every field of a merged particle is **forced** by a conservation law, not
 //! chosen: mass is additive, and position, velocity and heat are all the same
 //! mass-weighted-average shape. Un-weighted averages fail the momentum test on
-//! the first merge — which is precisely why that test exists.
+//! the first merge, which is what that test is for.
 //!
-//! Unlike `scalar.zig`, nothing here is under the baseline-honesty rules: this
-//! phase is demo-only and never benchmarked (RFC §2.5 rule 3 runs every
-//! measurement at `merging = false`), so it is free to be written for clarity.
-//! RFC §3.3 keeps Phase C scalar even in the SIMD build, so this is the only
-//! version of the traversal — but see `mergePair` for the one thing the SoA
-//! layout will have to do differently.
+//! The baseline-honesty rules in `scalar.zig` do not apply here. This phase is
+//! demo-only and never benchmarked (RFC §2.5 rule 3 runs every measurement at
+//! `merging = false`), so it is written for clarity. RFC §3.3 keeps Phase C
+//! scalar even in the SIMD build; see `mergePair` for the one thing the SoA
+//! layout has to do differently.
 //!
-//! **On energy.** Step 10 banks the destroyed kinetic energy into `heat`, and
-//! that part is exact. It does *not* bank the merged pair's mutual potential,
-//! which simply vanishes from the system along with the pair — so RFC §2.5
-//! test (d)'s `KE + PE + Σheat` steps upward slightly at each merge rather
-//! than holding constant. That is a gap in the spec's wording, not a bug here;
-//! the tests assert the exact claims exactly and make no approximate one.
+//! **On energy.** Step 10 banks the destroyed kinetic energy into `heat`,
+//! exactly. It leaves out the merged pair's mutual potential, which vanishes
+//! from the system along with the pair, so RFC §2.5 test (d)'s
+//! `KE + PE + Σheat` steps upward slightly at each merge. The spec's wording
+//! overstates the invariant. The tests assert the exact claims exactly and
+//! make no approximate one.
 
 const std = @import("std");
 
@@ -48,9 +47,8 @@ pub fn mergeCollisions(sim: *Sim, cfg: Config) usize {
             for (i + 1..sim.n) |j| {
                 const dx = sim.particles[j].x - sim.particles[i].x;
                 const dy = sim.particles[j].y - sim.particles[i].y;
-                // Squared compare, so no sqrt. And no `eps2` here: this is a
-                // proximity test between two points, not a force evaluation —
-                // adding the softening term would be a category error.
+                // Squared compare, so no sqrt. No `eps2` either: this is a
+                // proximity test between two points, not a force evaluation.
                 const d2 = dx * dx + dy * dy;
                 if (d2 < cfg.d_merge2) {
                     mergePair(sim, i, j);
@@ -71,10 +69,10 @@ pub fn mergeCollisions(sim: *Sim, cfg: Config) usize {
 /// particle. Swap-remove is O(1) and legal because nothing in the algorithm
 /// depends on particle order.
 ///
-/// **Note for the SoA build (RFC §3.2).** Leaving stale data in the vacated
-/// slot is correct *here* — the scalar build never reads past `n`. The SIMD
-/// build reads to `n_padded` by design, so its version of this function must
-/// re-zero the vacated slot's mass, or that slot becomes a ghost particle:
+/// **Note for the SoA build (RFC §3.2).** The scalar build never reads past
+/// `n`, so stale data in the vacated slot is harmless here. The SIMD build
+/// reads to `n_padded` by design, so its version of this function has to
+/// re-zero the vacated slot's mass. Skipping that leaves a ghost particle:
 /// invisible to the renderer, unmergeable, and still pulling on everything.
 pub fn mergePair(sim: *Sim, i: usize, j: usize) void {
     std.debug.assert(i < j);

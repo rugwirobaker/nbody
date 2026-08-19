@@ -1,10 +1,9 @@
 //! The SIMD build: SoA layout and vector kernels (RFC §3).
 //!
-//! Same algorithm as `scalar.zig` — same force law, same integration order,
-//! same **ordered**-pair n² traversal. What differs is the memory layout and
-//! the instruction width, and nothing else. If you find yourself changing what
-//! is computed rather than how wide it is computed, the comparison has stopped
-//! being fair.
+//! Same algorithm as `scalar.zig`: same force law, same integration order,
+//! same **ordered**-pair n² traversal. Only the memory layout and the
+//! instruction width differ. Changing *what* is computed here, as opposed to
+//! how many lanes wide it runs, breaks the comparison.
 //!
 //! Layout and kernels live in one file on purpose: the padding invariant
 //! (§3.2) spans them. Phase A reads to `n_padded` *by design*, so the code
@@ -77,13 +76,13 @@ pub const Particles = struct {
 
     /// Builds the SoA layout from a seeded AoS sim.
     ///
-    /// This is the **only** way a SoA sim gets populated, and that is a
-    /// deliberate constraint rather than a convenience. `seed.populate` fills
-    /// an AoS `Sim`; a second seeding path writing straight into these arrays
-    /// would have to be *proved* to produce identical particles, and §3.5
-    /// compares the two builds over a chaotic system where a one-ULP
-    /// difference in initial conditions diverges exponentially. Converting
-    /// makes bit-identical initial conditions true by construction.
+    /// This is the **only** way a SoA sim gets populated, by design.
+    /// `seed.populate` fills an AoS `Sim`; a second seeding path writing
+    /// straight into these arrays would have to be *proved* to produce
+    /// identical particles. §3.5 compares the two builds over a chaotic
+    /// system, where a one-ULP difference in initial conditions diverges
+    /// exponentially. Converting makes bit-identical initial conditions true
+    /// by construction.
     pub fn fromAoS(gpa: std.mem.Allocator, sim: Sim, comptime L: usize) !Particles {
         const cap = platform.alignUp(sim.n, L);
 
