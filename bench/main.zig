@@ -111,11 +111,37 @@ pub fn main(init: std.process.Init) !void {
     });
     try out.flush();
 
+    // Track ns/pair so the footer can report what this machine actually did,
+    // rather than restating a conclusion drawn on some other machine.
+    var scalar_best: f64 = std.math.inf(f64);
+    var scalar_best_n: usize = 0;
+    var scalar_last: f64 = 0;
+    var simd_best: f64 = std.math.inf(f64);
+    var simd_best_n: usize = 0;
+    var simd_last: f64 = 0;
+    var last_n: usize = 0;
+
     for (sweep) |n| {
         const s_row = try measure(.scalar, lanes, gpa, init.io, base, n);
         const v_row = try measure(.simd, lanes, gpa, init.io, base, n);
+
+        if (s_row.ns_per_pair < scalar_best) {
+            scalar_best = s_row.ns_per_pair;
+            scalar_best_n = n;
+        }
+        if (v_row.ns_per_pair < simd_best) {
+            simd_best = v_row.ns_per_pair;
+            simd_best_n = n;
+        }
+        scalar_last = s_row.ns_per_pair;
+        simd_last = v_row.ns_per_pair;
+        last_n = n;
+
         try out.print("  {d:>8}  {d:>15.1}  {d:>15.1}  {d:>9.3}  {d:>8.2}x\n", .{
-            n,                                     s_row.ns_per_tick, v_row.ns_per_tick, v_row.ns_per_pair,
+            n,
+            s_row.ns_per_tick,
+            v_row.ns_per_tick,
+            v_row.ns_per_pair,
             s_row.ns_per_tick / v_row.ns_per_tick,
         });
         try out.flush(); // a long sweep should report as it goes
@@ -145,12 +171,30 @@ pub fn main(init: std.process.Init) !void {
         try out.flush();
     }
 
-    try out.print("\n  ns/pair = ns/tick / n². Flat across n means the kernel is\n", .{});
-    try out.print("  compute-bound — and on this hardware it is flat all the way:\n", .{});
-    try out.print("  no cache cliff appears even at n = 16384, where each row\n", .{});
-    try out.print("  streams ~390 KB of AoS particles. The access pattern is pure\n", .{});
-    try out.print("  sequential and the per-pair sqrt+div leaves the prefetcher\n", .{});
-    try out.print("  ample time, so memory never becomes the limiter.\n", .{});
+    // ns/pair is the shape of the curve, not a headline number. Report what
+    // this run measured and leave the reading to the reader: the previous
+    // version of this footer asserted "no cache cliff appears", which was true
+    // on the machine it was written on and off by a couple of percent on the
+    // next one. A harness should state measurements, not memories.
+    try out.print("\n  ns/pair = ns/tick / n\u{b2}. Flat across n means compute-bound;\n", .{});
+    try out.print("  a rise at large n is the working set outgrowing cache.\n", .{});
+    try out.print("  Per row, AoS streams 24n bytes and SoA 12n.\n\n", .{});
+    try out.print("    scalar  best {d:.3} at n={d}, {d:.3} at n={d}  (+{d:.1}%)\n", .{
+        scalar_best,
+        scalar_best_n,
+        scalar_last,
+        last_n,
+        (scalar_last / scalar_best - 1.0) * 100.0,
+    });
+    try out.print("    simd    best {d:.3} at n={d}, {d:.3} at n={d}  (+{d:.1}%)\n", .{
+        simd_best,
+        simd_best_n,
+        simd_last,
+        last_n,
+        (simd_last / simd_best - 1.0) * 100.0,
+    });
+    try out.print("\n  A few percent is run-to-run noise or the first hint of cache\n", .{});
+    try out.print("  pressure; a large jump is the cliff itself.\n", .{});
     if (builtin.mode != .ReleaseFast) {
         try out.print("\n  WARNING: this build is {s}. These numbers measure register\n", .{@tagName(builtin.mode)});
         try out.print("  spills, not the algorithm (RFC §2.5 rule 1, §3.3c).\n", .{});
