@@ -82,12 +82,11 @@ scalar" is the assumption the whole project rests on
   `fsqrt s` and one scalar `fdiv s` per pair. Strict FP stopped LLVM from
   reordering the `ax +=` reduction across iterations, which is exactly the
   protection it is there for — the n² traversal is intact and un-widened.
-- LLVM *did* pair the two independent accumulators, emitting 2-wide NEON
+- LLVM pairs the two independent accumulators, emitting 2-wide NEON
   (`fsub.2s`, `fmul.2s`, `faddp.2s`, `fadd.2s`) for the x and y component
-  arithmetic. That is not a reordering of any single reduction, so nothing
-  forbids it, and it is what the natural code honestly compiles to — but it
-  means the baseline already gets 2-wide on the cheap operations, which is
-  worth remembering when reading the eventual speedup.
+  arithmetic. Each accumulator is still summed in order, so this is what the
+  natural code compiles to. The baseline therefore gets 2-wide on the cheap
+  operations, which sets the floor the SIMD kernel is measured against.
 
 ## Results
 
@@ -128,38 +127,39 @@ nbody-bench — scalar baseline vs SIMD (RFC Parts 2–3)
 
   Phase A only, ns/tick. Both kernels seeded from the same AoS sim.
 
-         n   scalar ns/tick     simd ns/tick  simd/pair    speedup
-  --------  ---------------  ---------------  ---------  ---------
-       256          72772.7          25088.5      0.383      2.90x
-       512         289154.2         100174.8      0.382      2.89x
-      1024        1153092.4         397079.7      0.379      2.90x
-      2048        4589706.4        1583431.0      0.378      2.90x
-      4096       18469597.2        6318726.6      0.377      2.92x
-      8192       74053266.6       25320383.8      0.377      2.92x
-     16384      296199633.0      102383433.2      0.381      2.89x
+         n   scalar ns/tick  scalar/pair     simd ns/tick  simd/pair    speedup
+  --------  ---------------  -----------  ---------------  ---------  ---------
+       256          72307.4        1.103          25028.6      0.382      2.89x
+       512         287764.8        1.098         100134.6      0.382      2.87x
+      1024        1151873.6        1.099         398832.8      0.380      2.89x
+      2048        4609210.2        1.099        1587517.1      0.378      2.90x
+      4096       18355020.8        1.094        6336130.3      0.378      2.90x
+      8192       73984058.4        1.102       25392908.2      0.378      2.91x
+     16384      296170150.2        1.103      102156516.8      0.381      2.90x
 
   Lane-width experiment (labeled, non-normative), n = 4096:
 
          L     simd ns/tick    speedup
   --------  ---------------  ---------
-         1       25169216.8      0.74x
-         2       12659286.4      1.46x
-         4        6341906.3      2.92x  <- native
-         8        6503198.0      2.85x
-        16        6226622.5      2.97x
+         1       25115516.8      0.74x
+         2       12601140.6      1.47x
+         4        6332427.1      2.93x  <- native
+         8        6494375.1      2.86x
+        16        6227330.9      2.98x
 
-  ns/pair = ns/tick / n². Flat across n means compute-bound;
-  a rise at large n is the working set outgrowing cache.
-  Per row, AoS streams 24n bytes and SoA 12n.
+  ns/pair = ns/tick / n², and it is the shape that matters.
+  Flat across n means compute-bound; a rise at large n is the
+  working set outgrowing cache (AoS streams 24n bytes per row,
+  SoA 12n). Small n carries real per-row overhead instead: one
+  @reduce per row, amortized over fewer sources.
 
-    scalar  best 1.094 at n=2048, 1.103 at n=16384  (+0.8%)
-    simd    best 0.377 at n=4096, 0.381 at n=16384  (+1.3%)
-
-  A few percent is run-to-run noise or the first hint of cache
-  pressure; a large jump is the cliff itself.
+  Each figure is the fastest of 3 runs, and run-to-run variation
+  is still 1–2 %. A cache cliff would be a large jump, not a few
+  percent — one sweep cannot resolve anything smaller.
 ```
 
-And the same sweep on x86_64-linux (AVX2, `L` = 8):
+And the same sweep on x86_64-linux (AVX2, `L` = 8). This excerpt predates
+the `scalar/pair` column, so it shows the tables only:
 
 ```
          n   scalar ns/tick     simd ns/tick  simd/pair    speedup
@@ -186,23 +186,63 @@ the memory layout and the instruction width differ. Run-to-run variation is a
 percent or two, so quote 2.9× and 5.8×; a third significant digit would be
 false precision.
 
+### How to read the table
+
+Each kernel gets three numbers. They are related: `ns/tick` divided by `n²` is
+`ns/pair`. Each answers a different question.
+
+Gravity superposes, so every particle sums over every source and the algorithm
+is O(n²) (RFC Step 7). That makes `n²` the unit of work. Dividing by it gives
+the cost of the implementation per unit of work, which should stay constant as
+`n` grows. A rising `ns/pair` means something outside the arithmetic is costing
+time.
+
+| Column | What it tells you |
+| --- | --- |
+| `ns/tick` | How long one Phase A takes. Use it for budgeting. |
+| `ns/pair` | Whether cost per unit of work stays constant as `n` grows. |
+| `speedup` | Which kernel is faster at this `n`. |
+
+`speedup` is a ratio of two times measured on the same clock, so the clock
+cancels and the figure is comparable across machines. That is how the NEON and
+AVX2 runs can be put side by side. `ns/pair` compares one kernel across `n`;
+`speedup` compares two kernels at one `n`.
+
+**Three regimes appear in `ns/pair`.** Small `n` sits high because each row pays
+for two `@reduce` calls regardless of how many sources it summed. The middle is
+the plateau: pure compute cost, and the figure to quote after a kernel change.
+Large `n` can drift up as the working set outgrows cache. On the run above that
+drift is about one percent, too small for a single sweep to confirm.
+
+**The plateau converts to cycles.** At roughly 4 GHz, 1.10 ns/pair is 4.4
+cycles for the scalar loop's fourteen float operations, including a `sqrt` and
+a `div`. 0.38 ns/pair is 6.1 cycles for the SIMD loop's four pairs. Divided
+into the disassembled instruction counts, both come to about 3.2 instructions
+per cycle. That figure says each kernel is limited by issue rate. A much lower
+figure, say 0.5, would indicate stalls on memory.
+
+**The demo budget follows from `ns/tick`.** `dt` is fixed at 1 ms, so 60 fps in
+real time needs about 17 ticks per frame, and RFC §2.4's clamp caps it at 10.
+One SIMD tick costs 1.6 ms at n = 2048, 6.3 ms at n = 4096, and 25 ms at
+n = 8192. Real time therefore holds to about n = 2048. Above that the
+simulation runs in slow motion with the clamp engaged. A larger `dt` buys
+headroom and costs integration accuracy.
+
 ### Reading the lane-width experiment
 
-Two things fall out of it, and the second only became visible with a second
+Two things fall out of it. The second only became visible with a second
 machine.
 
 **`L` = 1 is slower than the "scalar" baseline** — 0.74× on NEON, 0.85× on
-AVX2. That is not a defect; it is the SLP finding above, measured from the
-other side. The baseline is not truly 1-wide, because LLVM pairs its `ax`/`ay`
-chains into 2-wide vectors, so a genuinely 1-wide kernel loses to it. Against
-that honest 1-wide floor the native kernels reach **3.97× of a possible 4**
-(NEON, 99 % of ceiling) and **6.90× of a possible 8** (AVX2, 86 %).
+AVX2. This is the SLP finding above, measured from the other side: LLVM pairs
+the baseline's `ax`/`ay` chains into 2-wide vectors, so a genuinely 1-wide
+kernel loses to it. Measured against that 1-wide floor the native kernels reach
+**3.97× of a possible 4** (NEON, 99 % of ceiling) and **6.90× of a possible 8**
+(AVX2, 86 %).
 
-Both framings are true and they measure different things: the larger number is
-what vectorization achieves, the smaller is what it achieves *over code a
-reasonable engineer would actually write*. The smaller one is worth quoting,
-and publishing only the larger is exactly the cheat this project was built to
-avoid.
+The two figures measure different things. The larger is what vectorization
+achieves against a 1-wide kernel; the smaller is what it achieves against code
+a reasonable engineer would write. Quote the smaller one.
 
 **The two ISAs scale differently below native width**, which is where the AVX2
 shortfall comes from:

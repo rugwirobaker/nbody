@@ -40,6 +40,17 @@ const target_ns: i96 = 100 * std.time.ns_per_ms;
 const max_ticks: usize = 2000;
 const min_ticks: usize = 5;
 
+/// How many times each (kernel, n) is measured, keeping the fastest.
+///
+/// Timing noise is **one-sided**: interference from the rest of the machine
+/// can only ever make a run slower, never faster. So the minimum across
+/// repeats is the right estimator for "how fast can this actually go", and a
+/// stray scheduling hiccup stops landing in the table as a real-looking
+/// number. Note this is min across repeats *of the same measurement*, which is
+/// sound — unlike a min across different n, which compares things that
+/// legitimately differ.
+const repeats: usize = 3;
+
 /// Discarded work before the first measurement, to get the CPU off its idle
 /// clock. Per-row warmup ticks are not enough for this: three ticks at n = 512
 /// is under a millisecond, so without this the first row in the sweep pays for
@@ -103,43 +114,22 @@ pub fn main(init: std.process.Init) !void {
     try warmUp(gpa, init.io, base);
 
     try out.print("  Phase A only, ns/tick. Both kernels seeded from the same AoS sim.\n\n", .{});
-    try out.print("  {s:>8}  {s:>15}  {s:>15}  {s:>9}  {s:>9}\n", .{
-        "n", "scalar ns/tick", "simd ns/tick", "simd/pair", "speedup",
+    try out.print("  {s:>8}  {s:>15}  {s:>11}  {s:>15}  {s:>9}  {s:>9}\n", .{
+        "n", "scalar ns/tick", "scalar/pair", "simd ns/tick", "simd/pair", "speedup",
     });
-    try out.print("  {s:>8}  {s:>15}  {s:>15}  {s:>9}  {s:>9}\n", .{
-        "--------", "---------------", "---------------", "---------", "---------",
+    try out.print("  {s:>8}  {s:>15}  {s:>11}  {s:>15}  {s:>9}  {s:>9}\n", .{
+        "--------", "---------------", "-----------", "---------------", "---------", "---------",
     });
     try out.flush();
 
-    // Track ns/pair so the footer can report what this machine actually did,
-    // rather than restating a conclusion drawn on some other machine.
-    var scalar_best: f64 = std.math.inf(f64);
-    var scalar_best_n: usize = 0;
-    var scalar_last: f64 = 0;
-    var simd_best: f64 = std.math.inf(f64);
-    var simd_best_n: usize = 0;
-    var simd_last: f64 = 0;
-    var last_n: usize = 0;
-
     for (sweep) |n| {
-        const s_row = try measure(.scalar, lanes, gpa, init.io, base, n);
-        const v_row = try measure(.simd, lanes, gpa, init.io, base, n);
+        const s_row = try measureBest(.scalar, lanes, gpa, init.io, base, n);
+        const v_row = try measureBest(.simd, lanes, gpa, init.io, base, n);
 
-        if (s_row.ns_per_pair < scalar_best) {
-            scalar_best = s_row.ns_per_pair;
-            scalar_best_n = n;
-        }
-        if (v_row.ns_per_pair < simd_best) {
-            simd_best = v_row.ns_per_pair;
-            simd_best_n = n;
-        }
-        scalar_last = s_row.ns_per_pair;
-        simd_last = v_row.ns_per_pair;
-        last_n = n;
-
-        try out.print("  {d:>8}  {d:>15.1}  {d:>15.1}  {d:>9.3}  {d:>8.2}x\n", .{
+        try out.print("  {d:>8}  {d:>15.1}  {d:>11.3}  {d:>15.1}  {d:>9.3}  {d:>8.2}x\n", .{
             n,
             s_row.ns_per_tick,
+            s_row.ns_per_pair,
             v_row.ns_per_tick,
             v_row.ns_per_pair,
             s_row.ns_per_tick / v_row.ns_per_tick,
@@ -159,9 +149,9 @@ pub fn main(init: std.process.Init) !void {
     try out.print("  {s:>8}  {s:>15}  {s:>9}\n", .{ "L", "simd ns/tick", "speedup" });
     try out.print("  {s:>8}  {s:>15}  {s:>9}\n", .{ "--------", "---------------", "---------" });
 
-    const baseline = try measure(.scalar, lanes, gpa, init.io, base, experiment_n);
+    const baseline = try measureBest(.scalar, lanes, gpa, init.io, base, experiment_n);
     inline for (.{ 1, 2, 4, 8, 16 }) |experiment_lanes| {
-        const row = try measure(.simd, experiment_lanes, gpa, init.io, base, experiment_n);
+        const row = try measureBest(.simd, experiment_lanes, gpa, init.io, base, experiment_n);
         try out.print("  {d:>8}  {d:>15.1}  {d:>8.2}x{s}\n", .{
             experiment_lanes,
             row.ns_per_tick,
@@ -171,30 +161,20 @@ pub fn main(init: std.process.Init) !void {
         try out.flush();
     }
 
-    // ns/pair is the shape of the curve, not a headline number. Report what
-    // this run measured and leave the reading to the reader: the previous
-    // version of this footer asserted "no cache cliff appears", which was true
-    // on the machine it was written on and off by a couple of percent on the
-    // next one. A harness should state measurements, not memories.
-    try out.print("\n  ns/pair = ns/tick / n\u{b2}. Flat across n means compute-bound;\n", .{});
-    try out.print("  a rise at large n is the working set outgrowing cache.\n", .{});
-    try out.print("  Per row, AoS streams 24n bytes and SoA 12n.\n\n", .{});
-    try out.print("    scalar  best {d:.3} at n={d}, {d:.3} at n={d}  (+{d:.1}%)\n", .{
-        scalar_best,
-        scalar_best_n,
-        scalar_last,
-        last_n,
-        (scalar_last / scalar_best - 1.0) * 100.0,
-    });
-    try out.print("    simd    best {d:.3} at n={d}, {d:.3} at n={d}  (+{d:.1}%)\n", .{
-        simd_best,
-        simd_best_n,
-        simd_last,
-        last_n,
-        (simd_last / simd_best - 1.0) * 100.0,
-    });
-    try out.print("\n  A few percent is run-to-run noise or the first hint of cache\n", .{});
-    try out.print("  pressure; a large jump is the cliff itself.\n", .{});
+    // Both ns/pair columns are in the table above, so this explains how to
+    // read them and stops there. Earlier versions derived a summary and each
+    // one proved fragile: "no cache cliff appears" held on one machine and
+    // failed on the next, "final vs best" turned a noise-low row into an
+    // apparent trend, and a min-max spread reported whichever row was
+    // noisiest.
+    try out.print("\n  ns/pair = ns/tick / n\u{b2}, and it is the shape that matters.\n", .{});
+    try out.print("  Flat across n means compute-bound; a rise at large n is the\n", .{});
+    try out.print("  working set outgrowing cache (AoS streams 24n bytes per row,\n", .{});
+    try out.print("  SoA 12n). Small n carries real per-row overhead instead: one\n", .{});
+    try out.print("  @reduce per row, amortized over fewer sources.\n\n", .{});
+    try out.print("  Each figure is the fastest of {d} runs, and run-to-run variation\n", .{repeats});
+    try out.print("  is still 1\u{2013}2 %. A cache cliff would be a large jump, not a few\n", .{});
+    try out.print("  percent \u{2014} one sweep cannot resolve anything smaller.\n", .{});
     if (builtin.mode != .ReleaseFast) {
         try out.print("\n  WARNING: this build is {s}. These numbers measure register\n", .{@tagName(builtin.mode)});
         try out.print("  spills, not the algorithm (RFC §2.5 rule 1, §3.3c).\n", .{});
@@ -233,6 +213,23 @@ fn parseSweep(arena: std.mem.Allocator, args: []const [:0]const u8) ![]const usi
         if (slot.* == 0) return error.InvalidParticleCount;
     }
     return sweep;
+}
+
+/// Measures `repeats` times and returns the fastest result.
+fn measureBest(
+    comptime kernel: Kernel,
+    comptime L: usize,
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    base: nbody.Config,
+    n: usize,
+) !Result {
+    var best = try measure(kernel, L, gpa, io, base, n);
+    for (1..repeats) |_| {
+        const r = try measure(kernel, L, gpa, io, base, n);
+        if (r.ns_per_tick < best.ns_per_tick) best = r;
+    }
+    return best;
 }
 
 /// Times `computeAccelerations` alone — the RFC's Phase A, and the only thing
