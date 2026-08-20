@@ -5,8 +5,9 @@ algorithm** — once as an honest scalar baseline, once with SIMD — so the
 speedup between them means something.
 
 The physics, the normative rules, and the measurement methodology are specified
-in [`docs/RFC-001.md`](docs/RFC-001.md). This README is the map; the RFC is the
-contract.
+in [`docs/RFC-001.md`](docs/RFC-001.md), amended by
+[`docs/RFC-002.md`](docs/RFC-002.md) on merging. This README is the map; the
+RFCs are the contract.
 
 ## Why
 
