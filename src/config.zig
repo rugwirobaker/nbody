@@ -61,9 +61,17 @@ pub const Config = struct {
     /// numbers are only meaningful at fixed n.
     merging: bool = false,
 
-    /// Merge threshold squared. Default ≈ eps2, so the simulation never
-    /// lingers in the regime where softening distorts the force law.
-    d_merge2: f32 = 5.0e-4,
+    /// Density constant setting a body's radius, `r(m) = k·√m` (RFC-002 §1.1).
+    ///
+    /// Two bodies merge when their discs touch, so this is the one number
+    /// governing accretion — and the same number the renderer draws with, which
+    /// is the point of RFC-002. The default was measured by sweeping accretion
+    /// rate on the seeded disk (RFC-002 §2); above it the disk eats itself
+    /// inside an orbit.
+    ///
+    /// Zero is legal and stops merging geometrically, which is *not* a
+    /// substitute for `merging = false`: Phase C still runs and still scans.
+    merge_radius_scale: f32 = 5.0e-4,
 
     /// Per-tick multiplier on `heat` — radiative cooling, presentation only.
     /// **1.0 for the energy test** (RFC §2.5 test (d)).
@@ -78,7 +86,7 @@ pub const Config = struct {
         if (!(cfg.radius > 0)) return "radius must be > 0";
         if (!(cfg.mass_min > 0)) return "mass_min must be > 0";
         if (cfg.mass_max < cfg.mass_min) return "mass_max must be >= mass_min";
-        if (cfg.d_merge2 < 0) return "d_merge2 must be >= 0";
+        if (!(cfg.merge_radius_scale >= 0)) return "merge_radius_scale must be >= 0 and not NaN";
         return null;
     }
 };

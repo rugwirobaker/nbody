@@ -53,15 +53,6 @@ const Mode = enum(u32) {
 /// implementation this project follows resolves ~23,500.
 const demo_dt: f32 = 2.5e-4;
 
-/// Merge threshold squared, 100× smaller than `Config`'s default.
-///
-/// The default puts the merge radius at 0.0224 against a mean nearest-neighbour
-/// spacing of 0.0198, so at t = 0 nearly every particle is already touching one
-/// and 85 % of the population merges within the first second. Expressed as the
-/// fraction of the disk its merge discs cover, the default is 25 % where the
-/// reference implementation sits at 0.7 %. This value gives 0.25 %.
-const demo_d_merge2: f32 = 5.0e-6;
-
 const gpa = std.heap.wasm_allocator;
 
 var cfg: nbody.Config = .{};
@@ -106,10 +97,11 @@ export fn start(n: u32, seed: u32, preset: u32, merging: u32, mode_raw: u32) boo
         // Demo mode: RFC §2.6 turns merging on here and off for benchmarks.
         .merging = merging != 0,
 
-        // Two constants differ from `Config`'s defaults, both measured rather
-        // than guessed (see the note above `demo_dt`).
+        // One constant differs from `Config`'s defaults, measured rather than
+        // guessed (see the note above `demo_dt`). The merge scale is no longer
+        // among them: RFC-002 measured it on this very disk, so the library
+        // default is already the demo's value.
         .dt = demo_dt,
-        .d_merge2 = demo_d_merge2,
     };
     if (nbody.Config.validate(cfg) != null) return false;
 
@@ -164,6 +156,15 @@ export fn budgetLimited(which: u32) u32 {
 /// The demo's simulated seconds per tick, so the page can label its clocks.
 export fn dtSeconds() f64 {
     return demo_dt;
+}
+
+/// The density constant behind `r(m) = k·√m` (RFC-002 §1.1).
+///
+/// Exported so the renderer draws bodies at the size the physics merges them
+/// at. A copy of this number in JavaScript would be free to drift out of
+/// agreement with the simulation, which is the failure RFC-002 exists to end.
+export fn mergeRadiusScale() f64 {
+    return cfg.merge_radius_scale;
 }
 
 export fn particleCount(which: u32) u32 {

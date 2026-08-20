@@ -19,6 +19,22 @@ pub const Particle = struct {
     /// RFC Step 10: accumulated ΔKE from merges. Visual/diagnostic channel;
     /// nothing in the force law reads it.
     heat: f32,
+
+    /// This body's radius (RFC-002 §1.1): `k·√m`, from mass at constant
+    /// density, since mass is area in 2D.
+    ///
+    /// Derived rather than stored. A stored radius would be a second copy of
+    /// what `mass` already says, and every write to `mass` would have to
+    /// remember to update it — a body merging at the wrong distance is a
+    /// plausible-looking simulation that no conservation test would catch. The
+    /// field would also cost Phase A only 0.8–2.7 % (RFC-002 §1.1 measures it),
+    /// so performance is not what decides this.
+    ///
+    /// The merge rule, the tests, and the renderer all go through here, so none
+    /// of them can disagree about how big a body is.
+    pub fn radius(p: Particle, cfg: Config) f32 {
+        return cfg.merge_radius_scale * @sqrt(p.mass);
+    }
 };
 
 pub const Sim = struct {
@@ -32,6 +48,15 @@ pub const Sim = struct {
     /// survives unchanged into Part 3's SoA layout.
     ax: []f32,
     ay: []f32,
+    /// Phase C scratch: `Particle.radius` for each live body, refilled at the
+    /// top of every merge pass (RFC-002 §5.1).
+    ///
+    /// Scratch, not state — rebuilt from `mass` each pass, so it cannot
+    /// disagree with the masses it came from. It exists because the merge scan
+    /// compares every pair: computing the radius per pair costs 2.08× the
+    /// scan, and reading it from here costs 1.28×. Phase A never touches it,
+    /// and allocating it does not move Phase A's timing (RFC-002 §5.1).
+    radii: []f32,
     /// Live count. Shrinks when merging is enabled; never grows.
     n: usize,
 
@@ -43,12 +68,15 @@ pub const Sim = struct {
         const ax = try gpa.alloc(f32, cap);
         errdefer gpa.free(ax);
         const ay = try gpa.alloc(f32, cap);
+        errdefer gpa.free(ay);
+        const radii = try gpa.alloc(f32, cap);
 
         @memset(particles, std.mem.zeroes(Particle));
         @memset(ax, 0);
         @memset(ay, 0);
+        @memset(radii, 0);
 
-        return .{ .particles = particles, .ax = ax, .ay = ay, .n = 0 };
+        return .{ .particles = particles, .ax = ax, .ay = ay, .radii = radii, .n = 0 };
     }
 
     /// Allocates to `cfg.n` and fills it with the configured preset (RFC §2.7).
@@ -63,6 +91,7 @@ pub const Sim = struct {
         gpa.free(sim.particles);
         gpa.free(sim.ax);
         gpa.free(sim.ay);
+        gpa.free(sim.radii);
         sim.* = undefined;
     }
 

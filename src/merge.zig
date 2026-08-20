@@ -43,6 +43,13 @@ pub fn mergeCollisions(sim: *Sim, cfg: Config) usize {
     var restart = true;
     while (restart) {
         restart = false;
+
+        // Radii once per pass, not once per pair (RFC-002 §5.1). There are
+        // thousands of particles and millions of pairs, which is the whole of
+        // why this is hoisted: computing `radius` inside the scan costs 2.08×
+        // the fixed-threshold scan, reading it from here costs 1.28×.
+        for (sim.particles[0..sim.n], sim.radii[0..sim.n]) |p, *r| r.* = p.radius(cfg);
+
         scan: for (0..sim.n) |i| {
             for (i + 1..sim.n) |j| {
                 const dx = sim.particles[j].x - sim.particles[i].x;
@@ -50,7 +57,10 @@ pub fn mergeCollisions(sim: *Sim, cfg: Config) usize {
                 // Squared compare, so no sqrt. No `eps2` either: this is a
                 // proximity test between two points, not a force evaluation.
                 const d2 = dx * dx + dy * dy;
-                if (d2 < cfg.d_merge2) {
+                // Discs touching (RFC-002 §1.2), so what the renderer draws is
+                // what merges.
+                const contact = sim.radii[i] + sim.radii[j];
+                if (d2 < contact * contact) {
                     mergePair(sim, i, j);
                     merges += 1;
                     restart = true;
@@ -229,7 +239,7 @@ test "swap-remove handles j being the last live particle" {
 }
 
 test "mergeCollisions leaves pairs outside the threshold alone" {
-    const cfg = Config{ .merging = true, .d_merge2 = 0.01 }; // d_merge = 0.1
+    const cfg = Config{ .merging = true, .merge_radius_scale = 0.05 }; // two mass-1 bodies touch at 0.1
     var sim = try simOf(&.{
         .{ .x = 0, .y = 0, .vx = 0, .vy = 0, .mass = 1, .heat = 0 },
         .{ .x = 0.2, .y = 0, .vx = 0, .vy = 0, .mass = 1, .heat = 0 },
@@ -241,7 +251,7 @@ test "mergeCollisions leaves pairs outside the threshold alone" {
 }
 
 test "mergeCollisions merges pairs inside the threshold" {
-    const cfg = Config{ .merging = true, .d_merge2 = 0.01 };
+    const cfg = Config{ .merging = true, .merge_radius_scale = 0.05 };
     var sim = try simOf(&.{
         .{ .x = 0, .y = 0, .vx = 0, .vy = 0, .mass = 1, .heat = 0 },
         .{ .x = 0.05, .y = 0, .vx = 0, .vy = 0, .mass = 1, .heat = 0 },
@@ -252,16 +262,59 @@ test "mergeCollisions merges pairs inside the threshold" {
     try testing.expectEqual(@as(usize, 1), sim.n);
 }
 
+test "unequal masses merge when their discs touch, and not before" {
+    // The property RFC-002 exists to establish, and the one a fixed threshold
+    // cannot express: the trigger distance depends on both masses.
+    //
+    // Radii are k·√m, so mass 4 gives 2k and mass 1 gives k. They touch at 3k.
+    // A fixed threshold would fire at the same distance for these two as for a
+    // pair of specks.
+    const k: f32 = 0.05;
+    const cfg = Config{ .merging = true, .merge_radius_scale = k };
+    const contact = k * (@sqrt(@as(f32, 4)) + 1.0); // 0.15
+
+    inline for (.{ .{ contact * 1.02, 0, 2 }, .{ contact * 0.98, 1, 1 } }) |case| {
+        var sim = try simOf(&.{
+            .{ .x = 0, .y = 0, .vx = 0, .vy = 0, .mass = 4, .heat = 0 },
+            .{ .x = case[0], .y = 0, .vx = 0, .vy = 0, .mass = 1, .heat = 0 },
+        });
+        defer sim.deinit(testing.allocator);
+
+        try testing.expectEqual(@as(usize, case[1]), mergeCollisions(&sim, cfg));
+        try testing.expectEqual(@as(usize, case[2]), sim.n);
+    }
+}
+
+test "the same separation merges one pair and not another, by mass alone" {
+    // Two pairs the same distance apart. The heavy pair's discs overlap at that
+    // separation and the light pair's do not, so one merges and one does not —
+    // from mass, with no threshold in sight.
+    const cfg = Config{ .merging = true, .merge_radius_scale = 0.05 };
+    var sim = try simOf(&.{
+        .{ .x = 0.00, .y = 0, .vx = 0, .vy = 0, .mass = 9, .heat = 0 },
+        .{ .x = 0.18, .y = 0, .vx = 0, .vy = 0, .mass = 9, .heat = 0 }, // touch at 0.30
+        .{ .x = 10.00, .y = 0, .vx = 0, .vy = 0, .mass = 1, .heat = 0 },
+        .{ .x = 10.18, .y = 0, .vx = 0, .vy = 0, .mass = 1, .heat = 0 }, // touch at 0.10
+    });
+    defer sim.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 1), mergeCollisions(&sim, cfg));
+    try testing.expectEqual(@as(usize, 3), sim.n);
+    // The survivor of the heavy pair carries both their masses.
+    try testing.expectEqual(@as(f32, 18), sim.live()[0].mass);
+}
+
 test "chains collapse in one call (greedy with restart)" {
     // a–b and b–c both cross the threshold; a–c does not. Greedy merges the
     // first pair found, then the product merges again on the rescan.
     //
     // The positions need care, and the reason is worth knowing: the product
     // lands at the *centre of mass* of the pair, which can be farther from a
-    // third particle than either original was. At x = 0, 0.08, 0.16 the a–b
-    // product sits at 0.04, putting it 0.12 from c — outside a threshold that
-    // b itself was inside. Chaining is not transitive.
-    const cfg = Config{ .merging = true, .d_merge2 = 0.01 }; // d_merge = 0.1
+    // third particle than either original was. At x = 0, 0.08, 0.17 the a–b
+    // product sits at 0.04, putting it 0.13 from c — out of reach even after
+    // the product's radius grows. Chaining is not transitive; the test below
+    // asserts that case directly.
+    const cfg = Config{ .merging = true, .merge_radius_scale = 0.05 }; // two mass-1 bodies touch at 0.1
     var sim = try simOf(&.{
         .{ .x = 0.00, .y = 0, .vx = 0, .vy = 0, .mass = 1, .heat = 0 },
         .{ .x = 0.08, .y = 0, .vx = 0, .vy = 0, .mass = 1, .heat = 0 },
@@ -281,11 +334,16 @@ test "a merged product can land out of reach of a neighbour" {
     // The other half of the lesson above, asserted directly: b is inside the
     // threshold of both a and c, but merging a–b moves the product away from
     // c and the chain stops at one merge.
-    const cfg = Config{ .merging = true, .d_merge2 = 0.01 }; // d_merge = 0.1
+    //
+    // Under RFC-002 the product also *grows*: mass 2 gives it radius
+    // 0.05·√2 = 0.0707, so it reaches 0.1207 towards c rather than 0.1. c has
+    // to sit past that to be out of reach, which is why it is at 0.17 and not
+    // the 0.16 a fixed threshold would have needed.
+    const cfg = Config{ .merging = true, .merge_radius_scale = 0.05 }; // two mass-1 bodies touch at 0.1
     var sim = try simOf(&.{
         .{ .x = 0.00, .y = 0, .vx = 0, .vy = 0, .mass = 1, .heat = 0 },
         .{ .x = 0.08, .y = 0, .vx = 0, .vy = 0, .mass = 1, .heat = 0 },
-        .{ .x = 0.16, .y = 0, .vx = 0, .vy = 0, .mass = 1, .heat = 0 },
+        .{ .x = 0.17, .y = 0, .vx = 0, .vy = 0, .mass = 1, .heat = 0 },
     });
     defer sim.deinit(testing.allocator);
 
