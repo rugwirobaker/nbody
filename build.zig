@@ -109,4 +109,17 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(timestep_tests).step);
+
+    // So is the rule that paces the picture: a world publishes a frame once it
+    // has completed a frame's worth of ticks, which is what makes a starved
+    // kernel look starved rather than slowed down.
+    const world_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("viz/world.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "nbody", .module = nbody }},
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(world_tests).step);
 }

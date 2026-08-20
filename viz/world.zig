@@ -64,6 +64,11 @@ pub const World = struct {
     /// because the accumulator was drained.
     starved: bool = false,
 
+    /// Ticks run since the render buffer was last refreshed, and the number of
+    /// refreshes so far. Together they pace the picture — see `advance`.
+    ticks_since_pack: usize = 0,
+    render_updates: u64 = 1,
+
     pub const State = union(Kernel) {
         base: nbody.Sim,
         simd: nbody.simd.Particles,
@@ -176,7 +181,22 @@ pub const World = struct {
         w.real_seconds += @max(0, @as(f64, frame_seconds));
         w.decayWindow();
 
-        if (steps > 0) w.pack();
+        // Publish a picture once a full frame's worth of ticks is complete,
+        // rather than after every frame.
+        //
+        // Refreshing every frame shows a starved kernel a smaller step of
+        // motion sixty times a second, which reads as a deliberately slower
+        // simulation. Holding the buffer until `owed` ticks are done makes
+        // every published picture the same size of step, so a kernel that
+        // cannot keep up publishes fewer of them — the reading the reference
+        // implementation gets from its frame rate, which is the same quantity:
+        // pictures per second, against a fixed amount of physics in each.
+        w.ticks_since_pack += steps;
+        if (owed > 0 and w.ticks_since_pack >= owed) {
+            w.ticks_since_pack -= owed;
+            w.render_updates += 1;
+            w.pack();
+        }
     }
 
     fn decayWindow(w: *World) void {
@@ -244,6 +264,12 @@ pub const World = struct {
         return w.starved;
     }
 
+    /// How many pictures this world has published. Rising once per frame means
+    /// the kernel is keeping up; rising slower is the visible deficit.
+    pub fn renderUpdates(w: World) u64 {
+        return w.render_updates;
+    }
+
     /// Copies the live particles into the render buffer as `(x, y, mass, heat)`.
     ///
     /// Both layouts could feed WebGL directly — AoS through stride-24 attribute
@@ -274,3 +300,46 @@ pub const World = struct {
         }
     }
 };
+
+// ---------------------------------------------------------------------------
+// Tests. The pacing rule is what makes the demo's claim legible, so it is
+// asserted here rather than judged by eye in a browser.
+
+/// A clock frozen at zero, which makes the budget check exact: any elapsed
+/// figure is `0 - 0`, so a budget of 0 starves every frame after the first tick
+/// and a large budget never starves. No wall-clock timing enters the test.
+fn frozenClock() callconv(.c) f64 {
+    return 0;
+}
+
+test "a world that keeps up publishes once per frame" {
+    const cfg: nbody.Config = .{ .n = 64, .merging = false };
+    var w = try World.init(std.testing.allocator, cfg, .base);
+    defer w.deinit(std.testing.allocator);
+
+    const before = w.renderUpdates();
+    const frames = 30;
+    for (0..frames) |_| w.advance(cfg.dt * 20, 1e9, cfg, &frozenClock);
+
+    try std.testing.expectEqual(before + frames, w.renderUpdates());
+}
+
+test "a starved world publishes in proportion to the ticks it finished" {
+    const cfg: nbody.Config = .{ .n = 64, .merging = false };
+    var w = try World.init(std.testing.allocator, cfg, .base);
+    defer w.deinit(std.testing.allocator);
+
+    const before = w.renderUpdates();
+    const frames = 30;
+    // A zero budget stops each frame after its first tick, so ten frames of
+    // work land per frame's worth of demand.
+    for (0..frames) |_| w.advance(cfg.dt * 20, 0, cfg, &frozenClock);
+
+    try std.testing.expect(w.budgetLimited());
+    try std.testing.expectEqual(
+        before + frames / timestep.max_steps_per_frame,
+        w.renderUpdates(),
+    );
+    // Every published picture still carries a full frame's worth of motion.
+    try std.testing.expect(w.ticks_since_pack < timestep.max_steps_per_frame);
+}

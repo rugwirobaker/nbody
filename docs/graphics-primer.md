@@ -192,8 +192,10 @@ gl.blendFunc(gl.ONE, gl.ONE);
    elapsed wall clock; RFC §2.4's fixed-timestep accumulator lives on the Zig
    side, in `viz/timestep.zig`.
 2. **Upload what changed.** One `bufferSubData` per panel, copying the packed
-   particle array. The buffer was allocated once at its full size; each frame
-   overwrites its contents.
+   particle array. The buffer was allocated once at its full size; each upload
+   overwrites its contents. This demo skips the upload when the physics has no
+   new picture to show, which is what makes a kernel that cannot keep up look
+   like one.
 3. **Clear.** `gl.clear(gl.COLOR_BUFFER_BIT)` resets the frame to the
    background colour. Skipping it leaves the previous frame underneath, which
    is how trail effects are built deliberately.

@@ -24,17 +24,32 @@ const VIEW_HALF_EXTENT = 1.4;
 // Disc radius in world units at mass 1, before the sqrt(mass) scaling.
 const BASE_RADIUS = 0.008;
 
-// Wall clock offered to the physics each frame, in seconds — what is left of a
-// 60 Hz frame after the draw and the browser's own work. Under `stacked` the
-// two worlds split it, which is what lets the faster kernel run more ticks and
-// pull its simulated clock ahead.
+// Wall clock offered to the physics each frame, in seconds.
 //
-// This budget and the default n are chosen together. Measured at n = 1000,
-// simd finishes the ten ticks RFC §2.4 allows and base does not, so simd holds
-// ~35 real seconds per orbit while base takes ~87. Below n = 750 neither
-// kernel is stressed and the panels run in lockstep; above n = 1400 both are
-// starved and the whole thing crawls.
-const FRAME_BUDGET = 0.014;
+// Alone on screen a world gets a budget large enough to never engage, so it
+// runs the ticks the frame owes and the frame takes as long as it takes. A
+// kernel that cannot finish inside a refresh interval then produces a low
+// frame rate, which is how the same comparison reads in a native window. The
+// figure is a liveness guard and nothing else: without one, a large n would
+// stop the page answering clicks.
+//
+// Under `stacked` both worlds share one frame, so neither may spend it all;
+// they split a 60 Hz frame's usable remainder and each publishes at its own
+// rate instead.
+//
+// Pictures per second, measured over the first two seconds of a run:
+//
+//                 alone            stacked
+//        n     base    simd      base    simd
+//     1000       57      60        24      60
+//     1500       24      59        12      28
+//     2000       14      33         5      15
+//
+// The two modes peak at different n, since stacked halves the budget: 1000
+// pairs a choppy base against a smooth simd, and 1500 is where a solo base
+// collapses to 24 while a solo simd still holds the display's ceiling.
+const SOLO_BUDGET = 0.5;
+const STACKED_BUDGET = 0.014;
 
 const VERT = `#version 300 es
 layout(location = 0) in vec2 a_corner;    // quad corner, in [-1, 1]
@@ -75,6 +90,8 @@ void main() {
 // exactly. This is the page's version of what bench/main.zig does when it
 // prints the seed and full config above every table.
 
+// The page opens in stacked, where n = 1000 separates the panels most clearly:
+// base publishes at ~24 fps against simd's 60 (see the table above).
 const DEFAULTS = {
     n: 1000, seed: 0xc0ffee, preset: 0, merging: 1, mode: MODE.stacked,
     // Slider positions, both exponents: speed = 10^speed, extent = 1.4 * 2^zoom.
@@ -216,6 +233,30 @@ let cfg = readConfig();
 let panels = null;      // [base, simd], allocated to the current n
 let panelCapacity = 0;
 
+// Pictures per second, per panel, and the serial of the one on the GPU.
+//
+// Each published picture carries the same fixed amount of physics — RFC §2.4's
+// ten-tick frame — so the rate at which they arrive is throughput. It is the
+// reference implementation's FPS in another spelling, and it is the symptom
+// rather than the measurement: ns/tick stays the reported metric (§2.5 rule 2).
+const RATE_WINDOW = 0.5;
+const rate = [freshRate(), freshRate()];
+const published = [-1, -1];
+
+function freshRate() {
+    return { updates: 0, since: 0, fps: 0 };
+}
+
+function sampleRate(which, t) {
+    const r = rate[which];
+    const elapsed = (t - r.since) / 1000;
+    if (elapsed < RATE_WINDOW) return;
+    const updates = wasm.renderUpdates(which);
+    r.fps = (updates - r.updates) / elapsed;
+    r.updates = updates;
+    r.since = t;
+}
+
 function restart() {
     writeConfig(cfg);
     if (!wasm.start(cfg.n, cfg.seed, cfg.preset, cfg.merging, cfg.mode)) {
@@ -234,6 +275,12 @@ function restart() {
         ];
         panelCapacity = cfg.n;
     }
+    const t = performance.now();
+    for (const which of [BASE, SIMD]) {
+        rate[which] = { updates: wasm.renderUpdates(which), since: t, fps: 0 };
+        published[which] = -1;
+    }
+
     document.body.dataset.mode = MODE_NAME[cfg.mode];
     syncControls();
     for (const el of document.querySelectorAll('[data-f="lanes"]')) el.textContent = LANES;
@@ -281,10 +328,18 @@ function drawPanel(which, x, y, w, h) {
     gl.uniform1f(u.radius, BASE_RADIUS);
     gl.uniform3f(u.tint, ...TINT);
 
+    // The panel is redrawn every frame, from whatever picture its kernel last
+    // finished. Uploading only when a new one exists is what puts the deficit
+    // on screen: a starved kernel repeats a picture instead of showing a
+    // smaller step of motion.
+    const serial = wasm.renderUpdates(which);
     const panel = panels[which];
     gl.bindVertexArray(panel.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, panel.instances);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, data);
+    if (serial !== published[which]) {
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, data);
+        published[which] = serial;
+    }
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, data.length / FLOATS);
 }
 
@@ -321,6 +376,7 @@ function updateHud(which) {
     el.querySelector('[data-f="count"]').textContent = wasm.particleCount(which);
     el.querySelector('[data-f="clock"]').textContent = wasm.clockSeconds(which).toFixed(1) + "s";
     el.querySelector('[data-f="ns"]').textContent = magnitude(wasm.nsPerTick(which));
+    el.querySelector('[data-f="fps"]').textContent = rate[which].fps.toFixed(0);
     el.querySelector('[data-f="rt"]').textContent = rt > 0 ? rt.toFixed(2) : "—";
     const stats = el.querySelector(".stats");
     stats.classList.toggle("slow", rt > 0 && rt < 1);
@@ -340,11 +396,13 @@ function frame(t) {
 
     resize();
     if (running) {
-        // Under stacked the two worlds share one frame, so each gets half the
-        // budget. The faster kernel fits more ticks into its half and its
-        // simulated clock pulls ahead — the comparison, made visible.
-        const share = cfg.mode === MODE.stacked ? FRAME_BUDGET / 2 : FRAME_BUDGET;
+        // Alone, a world may take the whole frame and let the frame rate fall.
+        // Under stacked the two share one, so each gets half and publishes at
+        // its own rate instead.
+        const share = cfg.mode === MODE.stacked ? STACKED_BUDGET / 2 : SOLO_BUDGET;
         wasm.advance(elapsed * Math.pow(10, cfg.speed), share);
+        sampleRate(BASE, t);
+        sampleRate(SIMD, t);
     }
     draw();
     updateHud(BASE);
@@ -362,8 +420,13 @@ function setRunning(next) {
     running = next;
     runButton.textContent = running ? "pause" : "start";
     runButton.dataset.state = running ? "running" : "paused";
-    // Reset the frame clock so a long pause is not charged to the first frame.
+    // Reset the frame clock and the rate windows, so a long pause is charged
+    // neither to the first frame nor to the first rate figure after it.
     last = performance.now();
+    for (const which of [BASE, SIMD]) {
+        rate[which].updates = wasm.renderUpdates(which);
+        rate[which].since = last;
+    }
 }
 
 function syncControls() {

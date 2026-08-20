@@ -134,23 +134,23 @@
 
 <div class="hud" id="hud-base">
   <div class="name">base — scalar AoS</div>
-  <div class="stats">n&nbsp;<b data-f="count">—</b><span class="sep">·</span>t&nbsp;<b data-f="clock">—</b><span class="sep">·</span>ns/tick&nbsp;<b data-f="ns">—</b><span class="sep">·</span>×rt&nbsp;<b class="rt" data-f="rt">—</b></div>
+  <div class="stats">n&nbsp;<b data-f="count">—</b><span class="sep">·</span>fps&nbsp;<b data-f="fps">—</b><span class="sep">·</span>t&nbsp;<b data-f="clock">—</b><span class="sep">·</span>ns/tick&nbsp;<b data-f="ns">—</b><span class="sep">·</span>×rt&nbsp;<b class="rt" data-f="rt">—</b></div>
 </div>
 
 <div class="hud" id="hud-simd">
   <div class="name">simd — SoA, <span data-f="lanes">—</span> lanes</div>
-  <div class="stats">n&nbsp;<b data-f="count">—</b><span class="sep">·</span>t&nbsp;<b data-f="clock">—</b><span class="sep">·</span>ns/tick&nbsp;<b data-f="ns">—</b><span class="sep">·</span>×rt&nbsp;<b class="rt" data-f="rt">—</b></div>
+  <div class="stats">n&nbsp;<b data-f="count">—</b><span class="sep">·</span>fps&nbsp;<b data-f="fps">—</b><span class="sep">·</span>t&nbsp;<b data-f="clock">—</b><span class="sep">·</span>ns/tick&nbsp;<b data-f="ns">—</b><span class="sep">·</span>×rt&nbsp;<b class="rt" data-f="rt">—</b></div>
 </div>
 
-<div id="footnote">Phase-A ns/tick, never FPS (RFC §2.5).
-t is simulated time. Each panel gets wall clock
-rather than a tick quota, so the faster kernel
-runs more ticks and its clock pulls ahead.</div>
+<div id="footnote">fps counts pictures, and every picture carries
+the same ten ticks of physics — so the rate is
+throughput. The measurement is Phase-A ns/tick
+(RFC §2.5). t is simulated time.</div>
 
 <form id="controls">
   <label>n
     <input type="number" name="n" min="1" max="65536" step="1">
-    <span class="cap">Particles. Phase A costs n² per tick, so this is the dial that matters. Below ~750 both kernels keep pace and the panels run in lockstep; at 1000 simd holds real pace and base falls behind ~2.5×; above ~1400 both are starved and everything crawls.</span>
+    <span class="cap">Particles. Phase A costs n² per tick, so this is the dial that matters. Pictures per second, stacked: 24 against 60 at n = 1000, 12 against 28 at 1500, 5 against 15 at 2000. Alone on screen each kernel gets the whole frame, so raise n to 1500 there — base collapses to 24 while simd still holds 60.</span>
   </label>
 
   <label>seed
@@ -172,7 +172,7 @@ runs more ticks and its clock pulls ahead.</div>
       <option value="1">simd</option>
       <option value="2">stacked</option>
     </select>
-    <span class="cap">Which kernels run. stacked shows both from one seed, base left and simd right. They start bit-identical, so anything that separates them is real: first the throughput difference in their clocks, later chaos amplifying the lane reordering.</span>
+    <span class="cap">Which kernels run. Alone, a kernel may take the whole frame, so falling behind shows as a falling frame rate — switch between base and simd at n = 1500 to watch it. stacked runs both from one seed, base left and simd right, splitting the frame so neither can freeze the page; there each panel publishes at its own rate. They start bit-identical, so anything separating them is real.</span>
   </label>
 
   <label>speed
@@ -205,6 +205,10 @@ runs more ticks and its clock pulls ahead.</div>
     SIMD structure-of-arrays kernel. Same force law, same integration order,
     same ordered-pair n² traversal. Only the memory layout and the instruction
     width differ.</p>
+    <p>Each frame owes ten ticks of physics (RFC §2.4). A panel publishes a
+    picture once it has finished them, so the fps figure counts pictures of
+    equal physical size and reads as throughput. The reported measurement stays
+    Phase-A nanoseconds per tick.</p>
     <dl id="help-list"></dl>
     <div class="dismiss">Esc or click anywhere to close · Space toggles run</div>
   </div>

@@ -116,16 +116,36 @@ write to it, so a link reproduces a run exactly. That is the same reason
 
 The page opens paused. Space or the button starts it.
 
-Each panel reports **Phase-A ns/tick**, never FPS (RFC §2.5 rule 2), and a
-simulated clock. The clock is where the comparison shows: each world is given
-a share of wall clock per frame rather than a tick quota, so the faster kernel
-fits more ticks into its share and its clock pulls ahead. At the default
-n = 1000, simd finishes the ten ticks §2.4 allows while base does not, and the
-two clocks separate about 2.5×.
+### How the comparison reads on screen
 
-That default is chosen, not arbitrary. Below n ≈ 750 neither kernel is stressed
-and the panels run in lockstep; above n ≈ 1400 both are starved and the whole
-thing crawls at hundreds of real seconds per orbit.
+Every frame owes ten ticks of physics — RFC §2.4's accumulator and its clamp —
+and a panel publishes a picture once it has finished them. Each picture
+therefore carries the same amount of simulated time, and a kernel that cannot
+keep up publishes fewer of them per second. That rate is what the eye reads as
+performance, and it is throughput in another spelling: pictures per second
+against a fixed quantity of physics per picture.
+
+Alone on screen a kernel gets the whole frame. Falling behind then shows up as
+a falling frame rate, the same way it does in a native window. Under `stacked`
+the two split one frame, so neither can freeze the page and each publishes at
+its own rate:
+
+```
+                 alone            stacked
+       n      base    simd      base    simd
+    1000        57      60        24      60      <- default
+    1500        24      59        12      28
+    2000        14      33         5      15
+```
+
+Pictures per second, measured over the first two seconds of a run. The default
+sits where `stacked` separates most clearly. Switching to a solo mode and
+raising n to 1500 shows the other half of it: base collapses to 24 while simd
+still holds the display's ceiling.
+
+The panels also report **Phase-A ns/tick**, which is the measurement — RFC §2.5
+rule 2 keeps the reported figure free of anything the renderer does — and a
+simulated clock, which diverges at the same ratio for the same reason.
 
 ### Two demo constants differ from `Config`'s defaults
 

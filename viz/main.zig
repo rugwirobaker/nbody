@@ -127,10 +127,16 @@ export fn start(n: u32, seed: u32, preset: u32, merging: u32, mode_raw: u32) boo
 
 /// Advances every on-screen world by one frame's worth of wall clock.
 ///
-/// Each world keeps its own accumulator, which is the whole point of
-/// `stacked`: handed the same frame time, the kernel that cannot keep up hits
-/// RFC §2.4's clamp and visibly falls into slow motion while the other holds
-/// real time.
+/// Each world keeps its own accumulator and publishes a picture once it has
+/// completed a frame's worth of ticks, which is the whole point of `stacked`:
+/// handed the same frame time, the kernel that cannot keep up publishes fewer
+/// pictures and falls behind on its clock while the other holds the frame rate.
+///
+/// `budget_seconds` is what the caller is willing to spend on this world before
+/// cutting the frame short. Alone on screen a world gets a figure large enough
+/// to never engage, so a long frame becomes a low frame rate exactly as it does
+/// in a native window; under `stacked` the two split a frame so that neither
+/// can freeze the page.
 export fn advance(frame_seconds: f32, budget_seconds: f64) void {
     for (&worlds) |*w| {
         if (w.*) |*live| live.advance(frame_seconds, budget_seconds, cfg, &now);
@@ -180,6 +186,20 @@ export fn renderBufferOffset(which: u32) u32 {
     const k = kernelFrom(which) orelse return 0;
     const w = slot(k).* orelse return 0;
     return @intCast(@intFromPtr(w.render.ptr));
+}
+
+/// Pictures published since the run began.
+///
+/// The page reads it two ways: to skip the upload when nothing new exists, and
+/// to show the rate. That rate is the reference implementation's FPS in another
+/// spelling — each published picture carries the same fixed amount of physics,
+/// so pictures per second is throughput. The reported *metric* stays Phase-A
+/// ns/tick (RFC §2.5 rule 2); this is the symptom, not the measurement.
+export fn renderUpdates(which: u32) f64 {
+    const k = kernelFrom(which) orelse return 0;
+    const w = slot(k).* orelse return 0;
+    // f64 because JavaScript reads every number as one, and it cannot wrap.
+    return @floatFromInt(w.renderUpdates());
 }
 
 /// Phase-A nanoseconds per tick (RFC §2.5 rule 2). Never FPS.
