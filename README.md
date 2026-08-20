@@ -413,6 +413,21 @@ Nothing below is claimed until its test passes.
 - [x] Contact merging ([RFC-002](docs/RFC-002.md)): bodies merge when their
       discs touch, `r(m) = k·√m`, so the size on screen is the size that
       merges
+- [ ] Trails — a persistent framebuffer faded each frame, so orbits read as
+      orbits and a small body is not lost inside a large one's glow
+- [ ] Pan, and zoom about a point rather than the origin, so a cloud can be
+      followed as the system drifts outward past any fixed view
+- [ ] Close the energy ledger (RFC-003) — bank the merged pair's vanished
+      potential and account radiated heat rather than deleting it, turning
+      RFC-001 test (d)'s claim into the sharp invariant it was written as
+- [ ] Stellar formation and life (RFC-004) — ignition, the main sequence, mass
+      loss as light at `E = mc²`, and the endpoints a body reaches by mass:
+      white dwarf, neutron star, black hole. A radiating body loses mass, and
+      mass is the only thing the force law reads, so the whole cycle feeds back
+      into the orbits
+- [ ] Phase A on the GPU as a compute shader, with WebGPU in place of WebGL2
+- [ ] Native desktop, paired with the WebGPU work since Dawn and wgpu reach
+      both
 
 One caveat on what the green suite proves. RFC test (d) says
 `KE + PE + Σheat` holds constant across merges; it doesn't, quite. Step 10
