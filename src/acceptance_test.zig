@@ -319,7 +319,7 @@ test "(d) merging: the energy books close exactly for a single merge" {
     // nothing else, so after the merge there are no pairs left and PE is
     // exactly zero — which makes the vanished mutual potential exactly the
     // pre-merge PE, and every term in the ledger computable.
-    const cfg = Config{ .heat_decay = 1.0, .merging = true, .d_merge2 = 0.01 };
+    const cfg = Config{ .heat_decay = 1.0, .merging = true, .merge_radius_scale = 0.05 };
     var sim = try Sim.initCapacity(testing.allocator, 2);
     defer sim.deinit(testing.allocator);
     sim.push(.{ .x = 0, .y = 0, .vx = 1.5, .vy = -0.5, .mass = 3, .heat = 0 });

@@ -50,9 +50,43 @@ const HOT_POINT = 0.06;
 const HEAT_GAIN = 2.5;
 
 // World-space half-extent of the view at zoom 0. The seeded disk has radius 1.
-const VIEW_HALF_EXTENT = 1.4;
-// Disc radius in world units at mass 1, before the sqrt(mass) scaling.
-const BASE_RADIUS = 0.008;
+//
+// 2.8 rather than the disk's own size, because the disk does not keep it. Each
+// merge leaks a little energy into the system (RFC-001 Step 10), so the
+// survivors drift outward for as long as you watch: half of them are past 2.4
+// by ten seconds and past 7 by a hundred. 2.8 frames the accretion phase, which
+// is the part worth watching, and the zoom range below follows the rest.
+const VIEW_HALF_EXTENT = 2.8;
+
+// How much larger than life bodies are drawn.
+//
+// True radii are far below a pixel: k = 5e-4 puts a mass-1 body at 0.14 px and
+// the largest body a run produces at about 3 px, so drawn at life size the
+// whole field is specks and an accreted giant looks like the dust around it.
+//
+// The exaggeration is the same for every body, which is what makes it usable:
+// relative sizes stay exact, and so does relative closeness — two discs at the
+// same overlap are equally near to merging whatever their masses. That is the
+// property a fixed threshold could not offer at any scale, since it overstated
+// a speck by 7x and a giant by 69x.
+//
+// Discs touch at 4x the true merge distance. The help sheet says so.
+const DISPLAY_SCALE = 16.0;
+
+// Smallest radius a body may be drawn at, in device pixels.
+//
+// Bodies are drawn at the radius the physics merges them on (RFC-002 §6), and
+// that radius is small: k = 5e-4 puts a mass-1 body at 0.14 px and a mass-100
+// body at 1.4 px. Without a floor the field would be invisible. Below the floor
+// the drawn disc overstates the body, which is the very thing RFC-002 removes —
+// but only among bodies whose true size is under a pixel, where the picture
+// cannot be honest either way and there is nothing to predict. Above it the
+// disc is exact, which covers the large pairs whose merges you can now see
+// coming.
+//
+// With the scale above, only genuine dust lands here — anything that has merged
+// even once is drawn at its own size.
+const MIN_RADIUS_PX = 1.5;
 
 // Wall clock offered to the physics each frame, in seconds.
 //
@@ -87,7 +121,8 @@ layout(location = 1) in vec4 a_particle;  // x, y, mass, heat
 
 uniform vec2  u_scale;      // world -> clip, corrected for this viewport's aspect
 uniform vec2  u_centre;     // world-space point at the middle of the viewport
-uniform float u_radius;     // disc radius at mass 1
+uniform float u_radius;     // k, from the physics: a body's radius is k*sqrt(m)
+uniform float u_min_radius; // floor in world units, so dust stays visible
 uniform vec3  u_cold;       // colour of a body with no heat in it
 uniform vec3  u_mid;        // colour halfway up the ramp
 uniform vec3  u_hot;        // colour at the hot point
@@ -100,8 +135,10 @@ out vec3 v_colour;
 void main() {
     v_corner = a_corner;
 
-    // Mass maps to area in 2D, so radius goes as its square root.
-    float r = u_radius * sqrt(a_particle.z);
+    // Mass maps to area in 2D, so radius goes as its square root. This is the
+    // same r(m) the merge rule tests against, so two discs touching on screen
+    // means a merge this tick.
+    float r = max(u_radius * sqrt(a_particle.z), u_min_radius);
     vec2 world = a_particle.xy + a_corner * r;
     gl_Position = vec4((world - u_centre) * u_scale, 0.0, 1.0);
 
@@ -181,7 +218,7 @@ function readConfig() {
         merging: int("merging", 0, 1),
         mode: int("mode", 0, 2),
         speed: real("speed", -1.5, 0),
-        zoom: real("zoom", -1.2, 1.6),
+        zoom: real("zoom", -6.0, 4.5),
     };
 }
 
@@ -270,12 +307,16 @@ try {
 
 const FLOATS = wasm.floatsPerParticle();
 const LANES = wasm.laneCount();
+// Imported rather than duplicated: a copy of k here could drift out of
+// agreement with the simulation (RFC-002 §6).
+const MERGE_RADIUS_SCALE = wasm.mergeRadiusScale();
 
 const program = buildProgram(gl);
 const u = {
     scale: gl.getUniformLocation(program, "u_scale"),
     centre: gl.getUniformLocation(program, "u_centre"),
     radius: gl.getUniformLocation(program, "u_radius"),
+    minRadius: gl.getUniformLocation(program, "u_min_radius"),
     cold: gl.getUniformLocation(program, "u_cold"),
     mid: gl.getUniformLocation(program, "u_mid"),
     hot: gl.getUniformLocation(program, "u_hot"),
@@ -389,7 +430,9 @@ function drawPanel(which, x, y, w, h) {
 
     gl.uniform2f(u.scale, 1 / halfX, 1 / halfY);
     gl.uniform2f(u.centre, 0, 0);
-    gl.uniform1f(u.radius, BASE_RADIUS);
+    gl.uniform1f(u.radius, MERGE_RADIUS_SCALE * DISPLAY_SCALE);
+    // The floor is a pixel count, so it converts through the current zoom.
+    gl.uniform1f(u.minRadius, (MIN_RADIUS_PX * halfY * 2.0) / h);
     gl.uniform3f(u.cold, ...TINT_COLD);
     gl.uniform3f(u.mid, ...TINT_MID);
     gl.uniform3f(u.hot, ...TINT_HOT);

@@ -59,6 +59,14 @@ pub const Particles = struct {
     ax: Lanes,
     ay: Lanes,
 
+    /// Phase C scratch: `k·√m` for each live body, refilled at the top of every
+    /// merge pass (RFC-002 §5.1).
+    ///
+    /// Scratch, not state — rebuilt from `mass` each pass, so it cannot fall
+    /// out of step with it. Only `[0..n]` is ever filled or read, matching the
+    /// scan's bounds, so this array stays outside the padding invariant.
+    radii: Lanes,
+
     /// Live count. Everything at index ≥ `n` is padding and has mass zero.
     n: usize,
 
@@ -86,7 +94,7 @@ pub const Particles = struct {
     pub fn fromAoS(gpa: std.mem.Allocator, sim: Sim, comptime L: usize) !Particles {
         const cap = platform.alignUp(sim.n, L);
 
-        var arrays: [8]Lanes = undefined;
+        var arrays: [9]Lanes = undefined;
         var allocated: usize = 0;
         errdefer for (arrays[0..allocated]) |a| gpa.free(a);
         for (&arrays) |*a| {
@@ -107,6 +115,7 @@ pub const Particles = struct {
             .heat = arrays[5],
             .ax = arrays[6],
             .ay = arrays[7],
+            .radii = arrays[8],
             .n = sim.n,
             .n_padded = platform.alignUp(sim.n, L),
             .capacity = cap,
@@ -133,6 +142,7 @@ pub const Particles = struct {
         gpa.free(p.heat);
         gpa.free(p.ax);
         gpa.free(p.ay);
+        gpa.free(p.radii);
         p.* = undefined;
     }
 
@@ -283,13 +293,20 @@ pub fn mergeCollisions(comptime L: usize, p: *Particles, cfg: Config) usize {
     var restart = true;
     while (restart) {
         restart = false;
+
+        // Radii once per pass, not once per pair (RFC-002 §5.1). Only the live
+        // prefix is filled, matching the scan bounds below.
+        for (p.mass[0..p.n], p.radii[0..p.n]) |m, *r| r.* = cfg.merge_radius_scale * @sqrt(m);
+
         scan: for (0..p.n) |i| {
             for (i + 1..p.n) |j| {
                 const dx = p.x[j] - p.x[i];
                 const dy = p.y[j] - p.y[i];
                 // Proximity test, not a force evaluation: no eps2 here.
                 const d2 = dx * dx + dy * dy;
-                if (d2 < cfg.d_merge2) {
+                // Discs touching (RFC-002 §1.2).
+                const contact = p.radii[i] + p.radii[j];
+                if (d2 < contact * contact) {
                     mergePair(L, p, i, j);
                     merges += 1;
                     restart = true;

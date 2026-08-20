@@ -144,7 +144,7 @@ test "merging re-zeroes the vacated slot (the ghost-particle trap)" {
     // The bug this catches is silent: a renderer drawing [0..n] cannot see it,
     // it is never a merge candidate, and every test passes except
     // momentum-with-merging. Here it is caught directly.
-    const cfg = Config{ .merging = true, .d_merge2 = 0.01 };
+    const cfg = Config{ .merging = true, .merge_radius_scale = 0.05 };
     var sim = try Sim.initCapacity(testing.allocator, 4);
     defer sim.deinit(testing.allocator);
     sim.push(.{ .x = 0, .y = 0, .vx = 0, .vy = 0, .mass = 1, .heat = 0 });
@@ -192,7 +192,7 @@ test "a ghost would change the answer — so the re-zero is load-bearing" {
 }
 
 test "n_padded shrinks with n so the inner loop does too" {
-    const cfg = Config{ .merging = true, .d_merge2 = 0.01 };
+    const cfg = Config{ .merging = true, .merge_radius_scale = 0.05 };
     var sim = try Sim.initCapacity(testing.allocator, 3 * L);
     defer sim.deinit(testing.allocator);
     for (0..3 * L) |k| {

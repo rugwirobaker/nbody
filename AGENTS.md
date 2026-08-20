@@ -2,17 +2,22 @@
 
 Instructions for coding agents working in this repository. Read this before
 touching code; read [`docs/RFC-001.md`](docs/RFC-001.md) before touching
-physics.
+physics, and [`docs/RFC-002.md`](docs/RFC-002.md) before touching merging.
 
 ## What this project is
 
 A 2D gravitational N-body simulation implemented **twice over the same
 algorithm** — a scalar AoS baseline and a SIMD SoA kernel — so that the
-measured speedup between them is honest. `docs/RFC-001.md` is the
-specification and the authority; its **normative** rules (marked *must* /
+measured speedup between them is honest. The RFCs in `docs/` are the
+specification and the authority; their **normative** rules (marked *must* /
 *must not*) are requirements, not preferences. When code and RFC disagree, the
 RFC wins unless the user says otherwise. Cite RFC steps/sections in comments
 rather than restating derivations.
+
+Spec changes go in a **new numbered RFC**, never an edit to an old one, so
+reasoning that was superseded stays readable. The amended section keeps its
+original text and gains a pointer; the later amendment wins. `RFC-002` amends
+RFC-001's merge trigger this way.
 
 Three packages, dependencies pointing one way:
 

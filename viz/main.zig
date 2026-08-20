@@ -42,26 +42,6 @@ const Mode = enum(u32) {
     }
 };
 
-/// Simulated seconds per tick for the demo, four times finer than `Config`'s
-/// default.
-///
-/// The default resolves about 6,300 ticks per orbit at the seeded disk's
-/// dynamical time. Measured over 8,000 ticks at that resolution, merging drives
-/// total energy from -992 to positive — the system crosses from bound to
-/// unbound and the survivors fly apart. At 25,000 ticks per orbit energy holds
-/// to within 7 % and the disk stays together and framed. The reference
-/// implementation this project follows resolves ~23,500.
-const demo_dt: f32 = 2.5e-4;
-
-/// Merge threshold squared, 100× smaller than `Config`'s default.
-///
-/// The default puts the merge radius at 0.0224 against a mean nearest-neighbour
-/// spacing of 0.0198, so at t = 0 nearly every particle is already touching one
-/// and 85 % of the population merges within the first second. Expressed as the
-/// fraction of the disk its merge discs cover, the default is 25 % where the
-/// reference implementation sits at 0.7 %. This value gives 0.25 %.
-const demo_d_merge2: f32 = 5.0e-6;
-
 const gpa = std.heap.wasm_allocator;
 
 var cfg: nbody.Config = .{};
@@ -99,17 +79,22 @@ export fn start(n: u32, seed: u32, preset: u32, merging: u32, mode_raw: u32) boo
     if (n == 0) return false;
     if (preset > 1 or mode_raw > 2) return false;
 
+    // Every constant is now a library default. The demo used to override `dt`
+    // to a quarter of it and `d_merge2` to a hundredth, both because the fixed
+    // merge threshold let bodies plunge to one tiny distance before merging and
+    // the integrator could not resolve the encounters that made. Contact
+    // merging (RFC-002) removes those encounters — a body swallows its
+    // neighbour on contact, before the plunge — so both overrides went with it.
+    //
+    // Measured at the coarse step, the disk reaches a body holding 12.5 % of
+    // its mass in 4,000 ticks rather than 16,000, with matching survivor counts
+    // at every checkpoint and slightly better energy.
     cfg = .{
         .n = n,
         .seed = seed,
         .preset = if (preset == 0) .disk else .keplerian,
         // Demo mode: RFC §2.6 turns merging on here and off for benchmarks.
         .merging = merging != 0,
-
-        // Two constants differ from `Config`'s defaults, both measured rather
-        // than guessed (see the note above `demo_dt`).
-        .dt = demo_dt,
-        .d_merge2 = demo_d_merge2,
     };
     if (nbody.Config.validate(cfg) != null) return false;
 
@@ -161,9 +146,18 @@ export fn budgetLimited(which: u32) u32 {
     return @intFromBool(w.budgetLimited());
 }
 
-/// The demo's simulated seconds per tick, so the page can label its clocks.
+/// Simulated seconds per tick, so the page can label its clocks.
 export fn dtSeconds() f64 {
-    return demo_dt;
+    return cfg.dt;
+}
+
+/// The density constant behind `r(m) = k·√m` (RFC-002 §1.1).
+///
+/// Exported so the renderer draws bodies at the size the physics merges them
+/// at. A copy of this number in JavaScript would be free to drift out of
+/// agreement with the simulation, which is the failure RFC-002 exists to end.
+export fn mergeRadiusScale() f64 {
+    return cfg.merge_radius_scale;
 }
 
 export fn particleCount(which: u32) u32 {
