@@ -270,7 +270,7 @@ The geometry is a square. The fragment shader turns it into a disc:
 float d = length(v_corner);          // 0 at the centre, 1 at the edge midpoints
 float a = smoothstep(1.0, 0.0, d);   // 1 at the centre, fading to 0 at d = 1
 a *= a;                              // tighten the core
-fragColor = vec4(u_tint * a, 1.0);
+fragColor = vec4(v_colour * a, 1.0);
 ```
 
 `v_corner` is the quad corner the vertex shader passed through, interpolated
@@ -278,6 +278,13 @@ across the quad by the rasterizer, so each pixel receives its own position
 within the square. `smoothstep` gives a soft edge, which antialiases the disc
 for free — the alternative is multisampling, which costs memory bandwidth on
 every pixel of the frame.
+
+`v_colour` arrives the same way, and it is worth noting where it was computed.
+The particle's colour depends only on the particle, so the vertex shader works
+it out once from the temperature carried in the instance buffer, and all four
+corners emit the same value. Doing it here instead would repeat the work for
+every covered pixel. The rule generalises: compute per vertex what varies per
+vertex, and let the rasterizer carry it.
 
 The glow comes from the blend mode. `blendFunc(ONE, ONE)` makes each fragment
 *add* to what is already in the framebuffer, so overlapping particles sum their
