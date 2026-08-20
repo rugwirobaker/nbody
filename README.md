@@ -134,46 +134,72 @@ its own rate:
 ```
                  alone            stacked
        n      base    simd      base    simd
-    1000        57      60        24      60      <- default
-    1500        24      59        12      28
-    2000        14      33         5      15
+    1000        54      60        28      57      <- default
+    1500        28      57        12      25
+    2000        11      27         6      12
 ```
 
 Pictures per second, measured over the first two seconds of a run. The default
 sits where `stacked` separates most clearly. Switching to a solo mode and
-raising n to 1500 shows the other half of it: base collapses to 24 while simd
+raising n to 1500 shows the other half of it: base collapses to 28 while simd
 still holds the display's ceiling.
 
 The panels also report **Phase-A ns/tick**, which is the measurement — RFC §2.5
 rule 2 keeps the reported figure free of anything the renderer does — and a
 simulated clock, which diverges at the same ratio for the same reason.
 
-### Two demo constants differ from `Config`'s defaults
+### What you are looking at
 
-Both were measured rather than guessed, and both exist because the library
-defaults make merging destroy the simulation within a second.
+Three channels, each carrying one quantity, none of them overlapping:
 
-| | `Config` | demo | why |
-| --- | --- | --- | --- |
-| `d_merge2` | 5e-4 | 5e-6 | The default merge radius is 0.0224 against a mean nearest-neighbour spacing of 0.0198, so at t = 0 nearly every particle is already touching one. Its merge discs cover 25 % of the disk. |
-| `dt` | 1e-3 | 2.5e-4 | The default resolves ~6,300 ticks per orbit. That is not enough to integrate the close encounters merging creates. |
+| | shows | how |
+| --- | --- | --- |
+| Size | mass | `r(m) = k·√m` — the same radius the merge rule tests against |
+| Colour | temperature | `heat / mass`, pale blue through white to orange |
+| Brightness | temperature, and crowding | hotter bodies burn brighter; overlapping ones sum |
 
-Measured over 8,000 ticks at the library defaults with merging on, 85 % of the
-population merges in the first 500 ticks and total energy runs from −992 to
-positive: the system crosses from bound to unbound and the survivors leave.
-RFC Step 10 banks a merged pair's destroyed kinetic energy into `heat` and the
-pair's mutual potential simply vanishes, so every merge steps total energy up —
-an effect `AGENTS.md` already records at ~0.3 % per merge, compounded here
-about 1,975 times.
+Size is the merge cross-section (RFC-002 §1.1), so two discs at the same
+overlap are equally close to merging whatever they weigh. True radii are a
+fraction of a pixel, so bodies are drawn **16× life size** above a 1.5 px
+floor — the same factor for every body, which is what keeps the comparison
+between them honest.
 
-At the demo's constants the same run holds energy to within 7 %, `n` decays
-smoothly instead of collapsing, and the disk stays framed:
+Colour is temperature rather than heat, because heat pools when bodies merge
+and spans two decades; dividing by mass gives the intensive quantity a ramp can
+use. A merge banks the kinetic energy it destroys into `heat`, which then
+decays, so a body flares orange and cools back to blue over the next second or
+so. Warm is the hot end deliberately: additive blending already turns a crowd
+of cold particles white, so **white means crowded and orange means hot**.
+
+### The demo runs on library defaults
+
+It no longer overrides anything. Both of the constants it used to carry —
+`dt` at a quarter of the default, and a merge threshold a hundredth of it —
+existed because the fixed merge threshold let bodies plunge to one tiny
+distance before merging, and the integrator could not resolve the encounters
+that produced. [RFC-002](docs/RFC-002.md)'s contact rule removes those
+encounters: a body swallows its neighbour when their discs touch, well before
+the plunge.
+
+Measured at the restored timestep, the disk reaches a body holding 12.5 % of
+its mass in 4,000 ticks rather than 16,000, with matching survivor counts at
+every checkpoint and slightly better energy — four times sooner in wall clock,
+so the accretion is something you watch rather than wait for.
+
+The system does not stay put. Every merge leaks a little energy (RFC-001
+Step 10, quantified in RFC-002 §7.2), so the survivors drift outward for as
+long as you watch:
 
 ```
-                        tick      n  merges   E/E0  r_p90
-library defaults        4000     25    1975  0.323  2.459
-demo constants          4000    306    1694  0.895  0.831
+   real s    sim t       n    r_p50    r_p90   in 1.4R   in 2.8R
+        0      0.0    1000     0.71     0.95      100%      100%
+       33     10.0     103     2.40     5.18       24%       59%
+      100     30.0      84     7.25    20.44        8%       18%
+      200     60.0      77    14.54    40.99        5%       13%
 ```
+
+The default view is 2.8 disk radii, which frames the accretion phase; the zoom
+range reaches 63 R to follow what comes after.
 
 ## What the baseline compiles to
 
@@ -384,14 +410,21 @@ Nothing below is claimed until its test passes.
       the lane-width experiment
 - [x] `nbody-viz` — wasm + WebGL2, with `base` / `simd` / `stacked` modes and
       Phase-A ns/tick reported per panel
+- [x] Contact merging ([RFC-002](docs/RFC-002.md)): bodies merge when their
+      discs touch, `r(m) = k·√m`, so the size on screen is the size that
+      merges
 
 One caveat on what the green suite proves. RFC test (d) says
 `KE + PE + Σheat` holds constant across merges; it doesn't, quite. Step 10
 banks the destroyed *kinetic* energy into `heat`, but the merged pair's mutual
 potential simply vanishes along with the pair, stepping total energy up at each
-merge — about 0.3 % of the total per merge at default config. The
-implementation follows Step 10 exactly and the tests split the claim
-accordingly: momentum, total mass and determinism are asserted sharply across
+merge. RFC-002 §7.2 measures it: a median of 0.019 % of the total per merge,
+a 90th percentile of 0.232 %, and a maximum of 4.5 % — heavy-tailed enough
+that no single figure describes it. Over a run those steps sum to +89 % of the
+initial energy, very nearly cancelled by the −80 % that radiative cooling
+removes, which is why the visible drift is small and why `E/E0` is weak
+evidence about anything. The implementation follows Step 10 exactly and the
+tests split the claim accordingly: momentum, total mass and determinism are asserted sharply across
 merges, energy flatness is asserted only on merge-free ticks, and the full
 ledger is proved exactly in a two-body case where the vanished term is
 computable.
