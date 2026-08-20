@@ -182,9 +182,9 @@ throughput. The measurement is Phase-A ns/tick
   </label>
 
   <label>zoom
-    <input type="range" name="zoom" min="-1.2" max="1.6" step="0.05">
+    <input type="range" name="zoom" min="-6" max="4.5" step="0.05">
     <output name="zoomout"></output>
-    <span class="cap">View half-width, in disk radii. The seeded disk has radius 1 and spreads as it relaxes and merges, so widen this on long runs.</span>
+    <span class="cap">View half-width, in disk radii. The range is wide because the system is: merging leaks energy, so the survivors keep drifting outward — half of them are past 7 disk radii after a hundred seconds. Zoom out to follow them, or in to pick apart a cluster where small bodies are hidden inside a big one's glow.</span>
   </label>
 
   <label>
@@ -209,6 +209,11 @@ throughput. The measurement is Phase-A ns/tick
     picture once it has finished them, so the fps figure counts pictures of
     equal physical size and reads as throughput. The reported measurement stays
     Phase-A nanoseconds per tick.</p>
+    <p>Size is mass: a body's radius is proportional to the square root of its
+    mass, exactly as the merge rule computes it, so two discs at the same
+    overlap are equally close to merging whatever they weigh. Bodies are drawn
+    four times life size, since true radii are a fraction of a pixel — the same
+    factor for every body, so relative sizes and distances stay exact.</p>
     <p>Colour is temperature — heat per unit mass, where a merge banks the
     kinetic energy it destroys and the body then cools. Cold dust is pale blue;
     a body that has just eaten something runs white and then orange, and burns
