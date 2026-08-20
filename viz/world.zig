@@ -278,8 +278,8 @@ pub const World = struct {
     /// ignorant of how the physics stores anything. The cost is O(n) against
     /// Phase A's O(n²).
     ///
-    /// `heat` is written but unused by the v1 shader; it rides along so the
-    /// tinting work later is shader-only.
+    /// `heat` is what the shader colours by: divided by mass it gives a
+    /// temperature, which sets both the tint and the brightness.
     pub fn pack(w: *World) void {
         var out = w.render;
         switch (w.state) {

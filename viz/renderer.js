@@ -15,9 +15,39 @@ const MODE_NAME = ["base", "simd", "stacked"];
 // --- palette ------------------------------------------------------------
 // Additive blending only ever adds light, so the ground has to be dark for
 // anything to read. Overlapping discs sum toward white on their own, which is
-// where the accretion glow comes from — no per-particle colour logic.
+// where the accretion glow comes from.
 const CLEAR = [0x05 / 255, 0x07 / 255, 0x0d / 255, 1.0];
-const TINT = [0xff / 255, 0xd9 / 255, 0xb0 / 255];
+
+// The temperature ramp. A merge banks the kinetic energy it destroys into
+// `heat` (RFC Step 10), which then decays, so a body flares and cools back.
+//
+// Warm reads as hot and the ramp runs through white, which keeps the two
+// signals apart: additive blending already turns a crowd of cold particles
+// white, so white means crowded and orange means hot. Ramping toward blue
+// instead — the direction a real blackbody moves — would put heat and density
+// on the same axis and make them impossible to tell apart. A straight line
+// from blue to orange passes through a dusty pink, so white is a third stop
+// rather than an accident of the interpolation.
+const TINT_COLD = [0xbc / 255, 0xd0 / 255, 0xee / 255]; // inert dust
+const TINT_MID = [0xff / 255, 0xfa / 255, 0xf0 / 255]; // the crossover
+const TINT_HOT = [0xff / 255, 0x8a / 255, 0x3c / 255]; // just merged
+
+// Specific heat (heat/mass) that reads as fully hot, and how much brighter a
+// fully hot body burns than a cold one.
+//
+// Set from the temperature bodies actually reach. Sampled across 34,159 merge
+// events at the demo's config, the body coming out of a merge holds a median
+// heat/mass of 0.029, a 90th percentile of 0.102, and a 99th of 0.262. A hot
+// point of 0.06 therefore puts a typical merge at white and a strong one at
+// full orange, which is what the ramp is for.
+//
+// It also sets how long a flare lasts, and that is the part worth keeping in
+// mind. Heat decays at a fixed fractional rate, so what the eye reads as the
+// fade is the time a body spends *above* this threshold: from a median merge
+// that is around 660 ticks, and from a 90th-percentile one around 1,900.
+// Raising the hot point shortens both.
+const HOT_POINT = 0.06;
+const HEAT_GAIN = 2.5;
 
 // World-space half-extent of the view at zoom 0. The seeded disk has radius 1.
 const VIEW_HALF_EXTENT = 1.4;
@@ -55,25 +85,52 @@ const VERT = `#version 300 es
 layout(location = 0) in vec2 a_corner;    // quad corner, in [-1, 1]
 layout(location = 1) in vec4 a_particle;  // x, y, mass, heat
 
-uniform vec2  u_scale;   // world -> clip, corrected for this viewport's aspect
-uniform vec2  u_centre;  // world-space point at the middle of the viewport
-uniform float u_radius;  // disc radius at mass 1
+uniform vec2  u_scale;      // world -> clip, corrected for this viewport's aspect
+uniform vec2  u_centre;     // world-space point at the middle of the viewport
+uniform float u_radius;     // disc radius at mass 1
+uniform vec3  u_cold;       // colour of a body with no heat in it
+uniform vec3  u_mid;        // colour halfway up the ramp
+uniform vec3  u_hot;        // colour at the hot point
+uniform float u_hot_point;  // heat/mass that reads as fully hot
+uniform float u_gain;       // extra brightness a fully hot body emits
 
 out vec2 v_corner;
+out vec3 v_colour;
 
 void main() {
     v_corner = a_corner;
+
     // Mass maps to area in 2D, so radius goes as its square root.
     float r = u_radius * sqrt(a_particle.z);
     vec2 world = a_particle.xy + a_corner * r;
     gl_Position = vec4((world - u_centre) * u_scale, 0.0, 1.0);
+
+    // Colour and brightness both come from temperature, since both are things
+    // temperature does to a radiating body. Mass stays out of it: it is
+    // already in the radius, and the light a body puts out is brightness times
+    // area, so feeding mass to both would count it twice and let the largest
+    // body drown the field.
+    //
+    // Temperature is heat per unit mass rather than heat. Heat pools when
+    // bodies merge, which leaves it heavy-tailed — a 90th percentile of 0.29
+    // against a maximum of 7.13 in the same frame. Dividing by mass gives the
+    // intensive quantity, which stays inside a range a ramp can use.
+    float temperature = a_particle.w / max(a_particle.z, 1e-6);
+    float t = clamp(temperature / u_hot_point, 0.0, 1.0);
+
+    vec3 hue = t < 0.5 ? mix(u_cold, u_mid, t * 2.0)
+                       : mix(u_mid, u_hot, t * 2.0 - 1.0);
+
+    // Per particle rather than per pixel: all four corners carry the same
+    // colour, so the rasterizer interpolates between equal values.
+    v_colour = hue * (1.0 + u_gain * t);
 }`;
 
 const FRAG = `#version 300 es
 precision highp float;
 
 in vec2 v_corner;
-uniform vec3 u_tint;
+in vec3 v_colour;
 out vec4 fragColor;
 
 void main() {
@@ -82,7 +139,10 @@ void main() {
     float d = length(v_corner);
     float a = smoothstep(1.0, 0.0, d);
     a *= a;  // tighten the core so dense regions read as bright, not flat
-    fragColor = vec4(u_tint * a, 1.0);
+    // A hot body's colour runs past white at the centre and comes back into
+    // range down the falloff, so it reads as a blown-out core inside a
+    // coloured skirt — which is what a bright thing looks like.
+    fragColor = vec4(v_colour * a, 1.0);
 }`;
 
 // --- configuration, carried in the URL -----------------------------------
@@ -216,7 +276,11 @@ const u = {
     scale: gl.getUniformLocation(program, "u_scale"),
     centre: gl.getUniformLocation(program, "u_centre"),
     radius: gl.getUniformLocation(program, "u_radius"),
-    tint: gl.getUniformLocation(program, "u_tint"),
+    cold: gl.getUniformLocation(program, "u_cold"),
+    mid: gl.getUniformLocation(program, "u_mid"),
+    hot: gl.getUniformLocation(program, "u_hot"),
+    hotPoint: gl.getUniformLocation(program, "u_hot_point"),
+    gain: gl.getUniformLocation(program, "u_gain"),
 };
 
 const quad = gl.createBuffer();
@@ -326,7 +390,11 @@ function drawPanel(which, x, y, w, h) {
     gl.uniform2f(u.scale, 1 / halfX, 1 / halfY);
     gl.uniform2f(u.centre, 0, 0);
     gl.uniform1f(u.radius, BASE_RADIUS);
-    gl.uniform3f(u.tint, ...TINT);
+    gl.uniform3f(u.cold, ...TINT_COLD);
+    gl.uniform3f(u.mid, ...TINT_MID);
+    gl.uniform3f(u.hot, ...TINT_HOT);
+    gl.uniform1f(u.hotPoint, HOT_POINT);
+    gl.uniform1f(u.gain, HEAT_GAIN);
 
     // The panel is redrawn every frame, from whatever picture its kernel last
     // finished. Uploading only when a new one exists is what puts the deficit
