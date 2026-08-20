@@ -9,6 +9,7 @@
         "build.zig.zon",
         "src",
         "bench",
+        "viz",
         "docs",
         "README.md",
     },

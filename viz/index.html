@@ -1,0 +1,219 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>nbody — scalar baseline vs SIMD</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #05070d;
+    --ink: #c8d2e0;
+    --dim: #6b7789;
+    --rule: #1b2230;
+    --panel: #0c101a;
+    --warn: #ffb454;
+    --good: #7fd6a0;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    overflow: hidden;
+  }
+  #gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  #divider {
+    position: fixed; top: 0; bottom: 0; left: 50%;
+    width: 1px; background: var(--rule); display: none;
+  }
+  body[data-mode="stacked"] #divider { display: block; }
+
+  /* Two tight lines per panel. */
+  .hud {
+    position: fixed; top: 0; padding: 10px 12px;
+    pointer-events: none; line-height: 1.35;
+  }
+  .hud .name {
+    font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--dim);
+  }
+  .hud .stats { font-size: 12px; color: var(--dim); }
+  .hud .stats b { color: var(--ink); font-weight: 400; }
+  .hud .stats .sep { opacity: .45; margin: 0 .45em; }
+  .hud .stats.slow b.rt { color: var(--warn); }
+  .hud .stats.fast b.rt { color: var(--good); }
+
+  #hud-base, #hud-simd { left: 0; }
+  body[data-mode="stacked"] #hud-simd { left: 50%; }
+  body[data-mode="base"] #hud-simd,
+  body[data-mode="simd"] #hud-base { display: none; }
+
+  /* One compact row. Captions live in hover popovers so the bar stays thin
+     and the particle field keeps the screen. */
+  #controls {
+    position: fixed; left: 16px; right: 16px; bottom: 16px;
+    display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+    padding: 8px 12px;
+    background: rgba(5, 7, 13, .88);
+    border: 1px solid var(--rule); border-radius: 6px;
+    backdrop-filter: blur(6px);
+  }
+  #controls label {
+    position: relative;
+    display: flex; align-items: center; gap: 6px;
+    color: var(--dim); white-space: nowrap;
+  }
+  #controls input, #controls select, #controls button {
+    font: inherit; color: var(--ink);
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 4px;
+    padding: 4px 6px;
+  }
+  #controls input[type="number"] { width: 6em; }
+  #controls input[type="text"] { width: 8em; }
+  #controls input[type="range"] { width: 7.5em; padding: 0; accent-color: #ffd9b0; }
+  #controls output { color: var(--ink); min-width: 4.2em; }
+  #controls button { cursor: pointer; padding: 4px 12px; }
+  #controls button:hover { border-color: var(--dim); }
+  #controls .spacer { margin-left: auto; }
+  #run { min-width: 6em; }
+  #run[data-state="running"] { border-color: var(--good); color: var(--good); }
+  #help-toggle { width: 2.2em; padding: 4px 0; text-align: center; }
+
+  /* The caption, revealed above its own control on hover or keyboard focus. */
+  .cap { display: none; }
+  #controls label:hover > .cap,
+  #controls label:focus-within > .cap {
+    display: block;
+    position: absolute; bottom: calc(100% + 10px); left: 0;
+    width: 24em; padding: 10px 12px; z-index: 20;
+    font-size: 11px; line-height: 1.5; white-space: normal;
+    color: var(--ink);
+    background: var(--panel);
+    border: 1px solid var(--rule); border-radius: 6px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .7);
+  }
+
+  /* The same text, all at once, for actually reading. */
+  #help {
+    position: fixed; inset: 0; z-index: 30; display: none;
+    place-content: center;
+    background: rgba(5, 7, 13, .82); backdrop-filter: blur(3px);
+  }
+  body.help #help { display: grid; }
+  #help .sheet {
+    max-width: 62ch; max-height: 80vh; overflow-y: auto;
+    padding: 22px 26px;
+    background: var(--panel);
+    border: 1px solid var(--rule); border-radius: 8px;
+  }
+  #help h2 {
+    margin: 0 0 4px; font-size: 12px; font-weight: 400;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--dim);
+  }
+  #help dl { margin: 16px 0 0; }
+  #help dt { color: var(--ink); margin-top: 12px; }
+  #help dd { margin: 2px 0 0; color: var(--dim); line-height: 1.55; }
+  #help .dismiss { margin-top: 20px; color: var(--dim); font-size: 11px; }
+
+  #footnote {
+    position: fixed; right: 16px; top: 12px;
+    max-width: 26em; text-align: right; font-size: 10px; line-height: 1.5;
+    color: var(--dim); opacity: .8; pointer-events: none;
+  }
+  body[data-mode="stacked"] #footnote { display: none; }
+
+  #error {
+    position: fixed; inset: 0; display: none;
+    place-content: center; text-align: center; padding: 2rem;
+    color: var(--warn); white-space: pre-wrap;
+  }
+</style>
+
+<canvas id="gl"></canvas>
+<div id="divider"></div>
+
+<div class="hud" id="hud-base">
+  <div class="name">base — scalar AoS</div>
+  <div class="stats">n&nbsp;<b data-f="count">—</b><span class="sep">·</span>fps&nbsp;<b data-f="fps">—</b><span class="sep">·</span>t&nbsp;<b data-f="clock">—</b><span class="sep">·</span>ns/tick&nbsp;<b data-f="ns">—</b><span class="sep">·</span>×rt&nbsp;<b class="rt" data-f="rt">—</b></div>
+</div>
+
+<div class="hud" id="hud-simd">
+  <div class="name">simd — SoA, <span data-f="lanes">—</span> lanes</div>
+  <div class="stats">n&nbsp;<b data-f="count">—</b><span class="sep">·</span>fps&nbsp;<b data-f="fps">—</b><span class="sep">·</span>t&nbsp;<b data-f="clock">—</b><span class="sep">·</span>ns/tick&nbsp;<b data-f="ns">—</b><span class="sep">·</span>×rt&nbsp;<b class="rt" data-f="rt">—</b></div>
+</div>
+
+<div id="footnote">fps counts pictures, and every picture carries
+the same ten ticks of physics — so the rate is
+throughput. The measurement is Phase-A ns/tick
+(RFC §2.5). t is simulated time.</div>
+
+<form id="controls">
+  <label>n
+    <input type="number" name="n" min="1" max="65536" step="1">
+    <span class="cap">Particles. Phase A costs n² per tick, so this is the dial that matters. Pictures per second, stacked: 24 against 60 at n = 1000, 12 against 28 at 1500, 5 against 15 at 2000. Alone on screen each kernel gets the whole frame, so raise n to 1500 there — base collapses to 24 while simd still holds 60.</span>
+  </label>
+
+  <label>seed
+    <input type="text" name="seed" spellcheck="false">
+    <span class="cap">Any integer, hex or decimal. Same seed + same settings ⇒ the same run, exactly. 0xC0FFEE means nothing physical — it is a pronounceable hex word, and it is the seed the benchmark tables record, so demo and bench runs correspond.</span>
+  </label>
+
+  <label>preset
+    <select name="preset">
+      <option value="0">disk</option>
+      <option value="1">keplerian</option>
+    </select>
+    <span class="cap">disk: a uniform rotating disk with mass spread evenly, so orbital speed rises with radius. keplerian: the same disk around one heavy central body, so v ∝ 1/√r — the solar-system profile.</span>
+  </label>
+
+  <label>mode
+    <select name="mode">
+      <option value="0">base</option>
+      <option value="1">simd</option>
+      <option value="2">stacked</option>
+    </select>
+    <span class="cap">Which kernels run. Alone, a kernel may take the whole frame, so falling behind shows as a falling frame rate — switch between base and simd at n = 1500 to watch it. stacked runs both from one seed, base left and simd right, splitting the frame so neither can freeze the page; there each panel publishes at its own rate. They start bit-identical, so anything separating them is real.</span>
+  </label>
+
+  <label>speed
+    <input type="range" name="speed" min="-1.5" max="0" step="0.05">
+    <output name="speedout"></output>
+    <span class="cap">Wall clock fed to the accumulator, as a fraction of real time. Lower it to watch structure form. dt itself never changes, so the physics is identical either way. It stops at 1.0 because RFC §2.4's ten-tick clamp caps what one frame may claim.</span>
+  </label>
+
+  <label>zoom
+    <input type="range" name="zoom" min="-1.2" max="1.6" step="0.05">
+    <output name="zoomout"></output>
+    <span class="cap">View half-width, in disk radii. The seeded disk has radius 1 and spreads as it relaxes and merges, so widen this on long runs.</span>
+  </label>
+
+  <label>
+    <input type="checkbox" name="merging"> merging
+    <span class="cap">Accretion: bodies within d_merge become one, conserving mass, momentum and centre of mass (RFC §2.6). The demo runs a merge radius 100× tighter than Config's default, which otherwise merges 85 % of the disk in the first second and unbinds it.</span>
+  </label>
+
+  <span class="spacer"></span>
+  <button type="button" id="help-toggle" title="What do these do?">?</button>
+  <button type="button" id="run" data-state="paused">start</button>
+  <button type="submit">restart</button>
+</form>
+
+<div id="help">
+  <div class="sheet">
+    <h2>nbody — controls</h2>
+    <p>Two builds of one algorithm: a scalar array-of-structures baseline and a
+    SIMD structure-of-arrays kernel. Same force law, same integration order,
+    same ordered-pair n² traversal. Only the memory layout and the instruction
+    width differ.</p>
+    <p>Each frame owes ten ticks of physics (RFC §2.4). A panel publishes a
+    picture once it has finished them, so the fps figure counts pictures of
+    equal physical size and reads as throughput. The reported measurement stays
+    Phase-A nanoseconds per tick.</p>
+    <dl id="help-list"></dl>
+    <div class="dismiss">Esc or click anywhere to close · Space toggles run</div>
+  </div>
+</div>
+
+<div id="error"></div>
+
+<script type="module" src="./renderer.js"></script>

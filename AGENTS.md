@@ -18,9 +18,9 @@ Three packages, dependencies pointing one way:
 
 | Package | Depends on | Rule |
 | --- | --- | --- |
-| `nbody` (`src/`) | — | Renderer-free and I/O-free. No printing, no files, no raylib. |
+| `nbody` (`src/`) | — | Renderer-free and I/O-free. No printing, no files, no GL. |
 | `nbody-bench` (`bench/`) | `nbody` | Measurement only. |
-| `nbody-viz` | `nbody`, raylib | Not started. |
+| `nbody-viz` (`viz/`) | `nbody` | Wasm module + hand-written WebGL2. Browser only; the Zig side draws nothing. See [`docs/graphics-primer.md`](docs/graphics-primer.md) before touching the renderer. |
 
 ## Commands
 
