@@ -85,7 +85,9 @@ zig build viz && python3 -m http.server -d zig-out/web
 
 `zig build viz` produces three files and no dependencies: a 25 KB
 `wasm32-freestanding` build of the library, one HTML page, and one JavaScript
-file holding the WebGL2 renderer. There is no emscripten in the toolchain and
+file holding the WebGL2 renderer. If the renderer is unfamiliar territory,
+[`docs/graphics-primer.md`](docs/graphics-primer.md) explains what a GPU is
+asked to do and walks through this one. There is no emscripten in the toolchain and
 nothing in `build.zig.zon`. The library being renderer-free and I/O-free is
 what makes that possible — it imports `std.debug.assert`, `std.Random`, and an
 `Allocator`, all of which exist on freestanding wasm.
