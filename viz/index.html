@@ -189,7 +189,7 @@ throughput. The measurement is Phase-A ns/tick
 
   <label>
     <input type="checkbox" name="merging"> merging
-    <span class="cap">Accretion: bodies within d_merge become one, conserving mass, momentum and centre of mass (RFC §2.6). The demo runs a merge radius 100× tighter than Config's default, which otherwise merges 85 % of the disk in the first second and unbinds it.</span>
+    <span class="cap">Accretion: two bodies become one when their discs touch, conserving mass, momentum and centre of mass (RFC-002 §1.2). The size on screen is the size that merges, so you can see a merge coming. The demo overrides nothing: it runs on the library's own defaults.</span>
   </label>
 
   <label>
@@ -217,8 +217,8 @@ throughput. The measurement is Phase-A ns/tick
     <p>Size is mass: a body's radius is proportional to the square root of its
     mass, exactly as the merge rule computes it, so two discs at the same
     overlap are equally close to merging whatever they weigh. Bodies are drawn
-    four times life size, since true radii are a fraction of a pixel — the same
-    factor for every body, so relative sizes and distances stay exact.</p>
+    sixteen times life size, since true radii are a fraction of a pixel — the
+    same factor for every body, so relative sizes and distances stay exact.</p>
     <p>Colour is temperature — heat per unit mass, where a merge banks the
     kinetic energy it destroys and the body then cools. Cold dust is pale blue;
     a body that has just eaten something runs white and then orange, and burns

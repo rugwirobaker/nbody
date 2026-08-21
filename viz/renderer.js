@@ -70,7 +70,7 @@ const VIEW_HALF_EXTENT = 2.8;
 // property a fixed threshold could not offer at any scale, since it overstated
 // a speck by 7x and a giant by 69x.
 //
-// Discs touch at 4x the true merge distance. The help sheet says so.
+// Discs touch at 16x the true merge distance. The help sheet says so.
 const DISPLAY_SCALE = 16.0;
 
 // Smallest radius a body may be drawn at, in device pixels.
