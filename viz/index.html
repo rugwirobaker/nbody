@@ -222,10 +222,10 @@ throughput. The measurement is Phase-A ns/tick
   </label>
 
   <span class="spacer"></span>
-  <button type="button" id="reset-view" title="Both panels back to the opening view">reset view</button>
+  <button type="button" id="recentre" title="Both panels back to the opening view">recentre</button>
   <button type="button" id="help-toggle" title="What do these do?">?</button>
   <button type="button" id="run" data-state="paused">start</button>
-  <button type="submit">restart</button>
+  <button type="button" id="reset" title="Back to the opening settings, stopped">reset</button>
 </form>
 
 <div id="help">
@@ -262,7 +262,7 @@ throughput. The measurement is Phase-A ns/tick
       past seven disk radii after a hundred seconds. Each panel's gauge reads
       out where its own view sits in that range. To compare the same window in
       both, shift-double-click the panel you have framed and the other takes its
-      view; <b>reset view</b> in the bar puts both back where they started.</dd>
+      view; <b>recentre</b> in the bar puts both back where they started.</dd>
     </dl>
     <div class="dismiss">Esc or click anywhere to close · Space toggles run</div>
   </div>

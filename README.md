@@ -120,9 +120,14 @@ rather than making one per event, because `history.replaceState` is rate-limited
 and a drag that spent the budget would leave the address bar quietly disagreeing
 with the screen.
 
-The page opens paused. Space or the button starts it. Drag the field to pan and
-use the wheel to zoom about the pointer; double-click restores that panel's
-opening view.
+The page opens paused. Space or the button starts it. Every setting that
+decides the run — n, seed, preset, mode, merging — reseeds from the start and
+leaves the result paused, since two runs are only comparable if they began from
+the same conditions; **reset** puts the whole page back to its opening
+settings, cameras included, also paused. Speed and trails change what you are
+watching rather than what is being computed, so they take effect without
+reseeding. Drag the field to pan and use the wheel to zoom about the pointer;
+double-click restores that panel's opening view.
 
 Each panel carries its own camera, and a gesture moves only the panel it lands
 in. A shared one would only be worth having if the panels showed the same thing.
@@ -131,7 +136,7 @@ the same screen position is a different part of a different arrangement in each.
 What the page compares is throughput, which the HUD reports in ns/tick — the
 pictures are not in correspondence, and binding them to one view would only stop
 you inspecting either. For the times you do want both on the same window,
-shift-double-click propagates one panel's view to the other, and **reset view**
+shift-double-click propagates one panel's view to the other, and **recentre**
 returns both to the opening framing.
 
 There is no zoom control. Each panel's HUD carries a read-only gauge showing

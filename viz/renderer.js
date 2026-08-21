@@ -565,14 +565,14 @@ function sampleRate(which, t) {
     r.since = t;
 }
 
-function restart() {
+function reseed() {
     writeConfig(cfg);
     if (!wasm.start(cfg.n, cfg.seed, cfg.preset, cfg.merging, cfg.mode)) {
         fail("The simulation rejected that configuration.");
     }
     if (panelCapacity < cfg.n) {
         // Release the previous pair before allocating a wider one, or every
-        // restart at a larger n strands a VAO and a buffer on the GPU.
+        // reseed at a larger n strands a VAO and a buffer on the GPU.
         if (panels) for (const p of panels) {
             gl.deleteVertexArray(p.vao);
             gl.deleteBuffer(p.instances);
@@ -989,6 +989,7 @@ function frame(t) {
 
 const form = document.getElementById("controls");
 const runButton = document.getElementById("run");
+const resetButton = document.getElementById("reset");
 
 function setRunning(next) {
     running = next;
@@ -1030,8 +1031,15 @@ function syncGauges() {
     }
 }
 
-form.addEventListener("submit", (e) => {
-    e.preventDefault();
+// Every setting that decides the run reseeds from the start and leaves the
+// result stopped. Changing one mid-flight is not offered: two runs are only
+// comparable if they began from the same conditions, so a different setting is
+// a different run rather than a swerve in this one.
+//
+// `change` rather than `input`, so a half-typed number is never applied — the
+// text and number fields fire it on blur or Enter, the selects and the checkbox
+// as soon as they move.
+function applyForm() {
     const seed = Number(form.seed.value.trim());
     cfg = {
         ...cfg,
@@ -1041,14 +1049,31 @@ form.addEventListener("submit", (e) => {
         mode: Number(form.mode.value),
         merging: form.merging.checked ? 1 : 0,
     };
-    restart();
+    reseed();
+    setRunning(false);
+}
+
+for (const name of ["n", "seed", "preset", "mode", "merging"]) {
+    form[name].addEventListener("change", applyForm);
+}
+
+// The bar carries no submit button, so Enter in a field should do nothing
+// beyond the `change` it already fires. This is the guard for a browser that
+// submits anyway.
+form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    applyForm();
 });
 
-// Selects and the checkbox reseed immediately; the text and number fields wait
-// for the button, so a half-typed value is never applied.
-for (const name of ["preset", "mode", "merging"]) {
-    form[name].addEventListener("change", () => form.requestSubmit());
-}
+// Back to the page as it opens: the shipped settings, both cameras where they
+// started, stopped. Anything you want changed is changed from there and `start`
+// runs it, so reset is a way back to a known state rather than a re-run of
+// whatever the bar happens to hold.
+resetButton.addEventListener("click", () => {
+    cfg = { ...DEFAULTS, view: [{ ...DEFAULT_VIEW }, { ...DEFAULT_VIEW }] };
+    reseed();
+    setRunning(false);
+});
 
 // Trails are a view setting, not physics, so unlike `merging` this does not
 // reseed — restarting a run to switch off a visual effect would throw away the
@@ -1195,7 +1220,7 @@ function matchViews(view) {
 
 // Both panels back to the opening view. The gestures are per-panel by design,
 // so putting the two side by side again is the one thing they cannot express.
-document.getElementById("reset-view").addEventListener("click", () => {
+document.getElementById("recentre").addEventListener("click", () => {
     matchViews(DEFAULT_VIEW);
     cameraChanged();
 });
@@ -1234,6 +1259,6 @@ addEventListener("keydown", (e) => {
     }
 });
 
-restart();
+reseed();
 setRunning(false);   // seeded and drawn, waiting for you to start it
 requestAnimationFrame(frame);
