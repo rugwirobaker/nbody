@@ -157,6 +157,7 @@ Three channels, each carrying one quantity, none of them overlapping:
 | Size | mass | `r(m) = k·√m` — the same radius the merge rule tests against |
 | Colour | temperature | `heat / mass`, pale blue through white to orange |
 | Brightness | temperature, and crowding | hotter bodies burn brighter; overlapping ones sum |
+| Trails | nothing | one pixel wide, one colour, fading with age |
 
 Size is the merge cross-section (RFC-002 §1.1), so two discs at the same
 overlap are equally close to merging whatever they weigh. True radii are a
@@ -170,6 +171,71 @@ use. A merge banks the kinetic energy it destroys into `heat`, which then
 decays, so a body flares orange and cools back to blue over the next second or
 so. Warm is the hot end deliberately: additive blending already turns a crowd
 of cold particles white, so **white means crowded and orange means hot**.
+
+Trails are the exception that proves the rule: they are the one thing on screen
+carrying no quantity at all. Width is one device pixel and colour is one
+constant, deliberately, so a trail says only *this body was here* and never
+competes with the three channels above. The 128 heaviest bodies get one, which
+is every body once accretion has done its work and a bound on the cost before
+that.
+
+A point is added to each trail once per **published picture** rather than once
+per frame, which fixes its length in simulated time: base publishes far fewer
+pictures than simd, and a per-frame trail would show that as a difference in
+the physics. A trail holds 1,024 points, so 10.2 s of simulated time, and each
+point's opacity halves every 256 — it fades out rather than ending, which is
+what makes it read as a wake instead of a wire. Trails are stored in world
+coordinates, so a zoom leaves them attached to their bodies.
+
+Trails composite rather than add, the one place they depart from everything
+else on screen. Additive light sums, and a hundred crossing trails would climb
+to white — which already means *bodies are crowded here*. Compositing caps a
+pixel at the tint however many trails cross it, so the two signals stay
+separate.
+
+#### Trails without particle identity
+
+A trail has to stay attached to one body, and the simulation deliberately has
+no body identity: `mergePair` swap-removes, so a slot silently becomes a
+different body. The renderer recovers the lineage from what it can already see,
+because giving `Particle` an id would widen the AoS row from 24 bytes to 28 and
+move the memory traffic the whole 2.9× measurement rests on.
+
+Two signatures give a stale trail away, and both are needed because they catch
+different failures. **Position**: the slot was overwritten by the last live
+particle, which is somewhere else entirely. **Mass**: `mergePair` puts the
+product in the lower slot whatever the masses are, so a speck can swallow a
+giant and the product inherits the speck's trail — and since the two were
+touching, the position barely moves and no position test can ever see it. A
+trail is dropped when its body's step exceeds six times the median step of the
+same picture, or when its mass more than doubles. The threshold is a multiple
+of the median rather than a fixed distance because the median rises with `n`
+(orbital speed goes as `√(G·M_enc)`, and enclosed mass goes as `n`), while the
+*shape* does not: `p999/p50` measured between 2.98 and 3.38 in every run below.
+
+Measured against ground truth — a probe replicating `mergeCollisions`'s scan so
+it can track real identity through every swap-remove, with lineage following
+the heavier body:
+
+| | merges | detection | false positives | worst missed step |
+| --- | --- | --- | --- | --- |
+| disk, n = 500 | 435 | 100.00 % | 0.000 % | — |
+| disk, n = 1000 | 909 | 99.29 % | 0.000 % | 0.036 |
+| disk, n = 2000 | 1887 | 100.00 % | 0.000 % | — |
+| disk, n = 4000 | 3869 | 98.16 % | 0.006 % | 0.080 |
+| keplerian, n = 1000 | 915 | 100.00 % | 0.000 % | — |
+| keplerian, n = 2000 | 1878 | 100.00 % | 0.000 % | — |
+
+Separately at n = 1000, position alone catches 85.7 % and mass alone 13.6 %;
+together they reach 99.3 %, so the two are very nearly disjoint. What survives
+is bounded rather than merely rare: stale steps run to a median of 0.70 and a
+maximum of 21.6 world units, and **every one of those is caught in every
+configuration**. The residual one percent are all short-range — the worst
+missed step anywhere was 0.080 world units, about 14 px — so the visible
+failure is a small kink where a trail hands over to a body a few pixels away,
+never a line whipped across the screen. 6× rather than 4× because a false
+positive is the more visible failure: a trail that keeps truncating is a
+constant annoyance, a missed short-range handover is a rare kink.
 
 ### The demo runs on library defaults
 
@@ -413,8 +479,9 @@ Nothing below is claimed until its test passes.
 - [x] Contact merging ([RFC-002](docs/RFC-002.md)): bodies merge when their
       discs touch, `r(m) = k·√m`, so the size on screen is the size that
       merges
-- [ ] Trails — a persistent framebuffer faded each frame, so orbits read as
-      orbits and a small body is not lost inside a large one's glow
+- [x] Trails — the recent path of the heaviest bodies, stored in world
+      coordinates and drawn as lines, with the body each one belongs to
+      recovered from the packed buffer rather than from particle identity
 - [ ] Pan, and zoom about a point rather than the origin, so a cloud can be
       followed as the system drifts outward past any fixed view
 - [ ] Close the energy ledger (RFC-003) — bank the merged pair's vanished
