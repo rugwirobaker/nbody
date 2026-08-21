@@ -88,6 +88,92 @@ const DISPLAY_SCALE = 16.0;
 // even once is drawn at its own size.
 const MIN_RADIUS_PX = 1.5;
 
+// --- trails --------------------------------------------------------------
+// A trail is a bounded window of one body's past positions, drawn as a
+// polyline: a point added at the head each published picture, one dropped at
+// the tail. Stored in world coordinates, so a zoom leaves them attached to
+// their bodies.
+
+// How many bodies get trails, most massive first.
+//
+// The field is 1,000 bodies by default and a thousand long curves is a
+// hairball with no orbit visible in it. Trailing only the heaviest keeps the
+// picture readable, bounds the cost at any n, and tells the right story: the
+// accreted survivors are the ones whose orbits are worth following, and dust
+// is what makes the mess.
+const TRAIL_BODIES = 128;
+
+// Length of the window, in published pictures. Each picture is RFC 2.4's ten
+// ticks, so 1024 is 10.2 s of simulated time.
+const TRAIL_POINTS = 1024;
+
+// Points dropped in one go when a trail fills, rather than one per picture.
+//
+// A trail is kept contiguous so it draws as a single strip, which means making
+// room costs a copy. Doing that once every TRAIL_COMPACT pictures instead of
+// every picture turns the per-picture upload into one new point — twelve bytes
+// — where shifting would dirty the whole trail and force a megabyte back to
+// the GPU sixty times a second.
+const TRAIL_COMPACT = TRAIL_POINTS >> 3;
+
+// A point's opacity when new, and how many pictures it takes to halve.
+//
+// Trails are alpha-blended rather than additive, which is the one place they
+// depart from everything else on screen. Additive light sums, and a hundred
+// crossing trails would sum to white — the signal that already means "bodies
+// are crowded here". Compositing instead caps a pixel at the tint colour
+// however many trails cross it, so the two never get confused.
+//
+// Faint deliberately. Trails are the subordinate channel — they carry no
+// quantity at all — and the moment they are as bright as the bodies the
+// picture reads as a diagram of paths with some dots on it rather than as
+// bodies that leave wakes. 0.9 was tried and is too much: the field vanishes
+// behind its own history.
+//
+// A quarter of the window is one half-life, so a point is at 1/16 of its
+// starting opacity by the time it drops off the tail. It fades out rather
+// than ending, which is what makes it read as a wake instead of a wire.
+const TRAIL_ALPHA = 0.35;
+const TRAIL_HALF_LIFE = TRAIL_POINTS >> 2;
+
+// The simulation has no particle identity: `mergePair` swap-removes, so a slot
+// silently becomes a different body and a trail keyed by slot index follows
+// it. These two constants detect that from the packed buffer alone.
+//
+// A stale trail announces itself two ways, and both tests are needed because
+// they catch different failures:
+//
+//   - the slot was overwritten by the last live particle, which is somewhere
+//     else entirely, so the position jumps;
+//   - `mergePair` puts the product in the LOWER slot whatever the masses are,
+//     so a speck can swallow a giant and the product inherits the speck's
+//     trail. The two were touching or they would not have merged, so the
+//     position barely moves and only the mass jump gives it away.
+//
+// Measured against ground truth over six configurations (disk and keplerian,
+// n from 500 to 4000, 20,000 ticks each, ~900-3,900 merges apiece): position
+// alone catches 85.7 % of stale trails, mass alone 13.6 %, and together
+// 98.2-100 % at zero false positives for every n at which the demo is
+// interactive. Every miss is short-range — the worst missed step anywhere was
+// 0.080 world units, about 14 px — while the screen-crossing jumps (median
+// 0.70, max 21.6) are caught every time.
+//
+// The threshold is a multiple of the median step rather than a fixed distance
+// because the median rises with n: orbital speed goes as sqrt(G*M_enc) and
+// enclosed mass goes as n, so it runs 0.0043 at n = 500 and 0.0120 at
+// n = 4000. The shape does not move with it — p999/p50 measured 2.98 to 3.38
+// in every run — which is what makes a multiple travel where a constant does
+// not. 6x rather than 4x because a false positive is the more visible failure:
+// a trail that keeps truncating is a constant annoyance, a missed short-range
+// handover is a rare kink.
+const TRAIL_JUMP_FACTOR = 6.0;
+const TRAIL_MASS_RATIO = 2.0;
+
+// Trails are geometry, not data. Width is one device pixel and colour is one
+// constant, so neither encodes any quantity — bodies carry mass in their size
+// and temperature in their colour, and a trail says only "this body was here".
+const TRAIL_TINT = TINT_COLD;
+
 // Wall clock offered to the physics each frame, in seconds.
 //
 // Alone on screen a world gets a budget large enough to never engage, so it
@@ -182,6 +268,37 @@ void main() {
     fragColor = vec4(v_colour * a, 1.0);
 }`;
 
+const TRAIL_VERT = `#version 300 es
+layout(location = 0) in vec3 a_point;  // x, y in world units; z is birth
+
+uniform vec2  u_scale;
+uniform vec2  u_centre;
+uniform float u_now;        // the current picture's serial
+uniform float u_half_life;  // pictures taken to halve a point's opacity
+uniform float u_alpha;      // opacity of a brand-new point
+
+out float v_alpha;
+
+void main() {
+    gl_Position = vec4((a_point.xy - u_centre) * u_scale, 0.0, 1.0);
+
+    // Age in published pictures, which is age in simulated time — the same
+    // clock the sampling runs on, so a trail's taper matches its length.
+    float age = max(u_now - a_point.z, 0.0);
+    v_alpha = u_alpha * exp2(-age / u_half_life);
+}`;
+
+const TRAIL_FRAG = `#version 300 es
+precision highp float;
+
+in float v_alpha;
+uniform vec3 u_tint;
+out vec4 fragColor;
+
+void main() {
+    fragColor = vec4(u_tint, v_alpha);
+}`;
+
 // --- configuration, carried in the URL -----------------------------------
 // The address bar is the record of the run on screen: a link reproduces it
 // exactly. This is the page's version of what bench/main.zig does when it
@@ -190,7 +307,7 @@ void main() {
 // The page opens in stacked, where n = 1000 separates the panels most clearly:
 // base publishes at ~24 fps against simd's 60 (see the table above).
 const DEFAULTS = {
-    n: 1000, seed: 0xc0ffee, preset: 0, merging: 1, mode: MODE.stacked,
+    n: 1000, seed: 0xc0ffee, preset: 0, merging: 1, trails: 1, mode: MODE.stacked,
     // Slider positions, both exponents: speed = 10^speed, extent = 1.4 * 2^zoom.
     speed: 0, zoom: 0,
 };
@@ -216,6 +333,7 @@ function readConfig() {
         seed: int("seed", 0, 0xffffffff),
         preset: int("preset", 0, 1),
         merging: int("merging", 0, 1),
+        trails: int("trails", 0, 1),
         mode: int("mode", 0, 2),
         speed: real("speed", -1.5, 0),
         zoom: real("zoom", -6.0, 4.5),
@@ -228,6 +346,7 @@ function writeConfig(cfg) {
     q.set("seed", "0x" + cfg.seed.toString(16).toUpperCase());
     q.set("preset", cfg.preset);
     q.set("merging", cfg.merging);
+    q.set("trails", cfg.trails);
     q.set("mode", cfg.mode);
     q.set("speed", cfg.speed.toFixed(2));
     q.set("zoom", cfg.zoom.toFixed(2));
@@ -253,10 +372,10 @@ function compile(gl, type, source) {
     return sh;
 }
 
-function buildProgram(gl) {
+function buildProgram(gl, vertSrc, fragSrc) {
     const prog = gl.createProgram();
-    gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VERT));
-    gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FRAG));
+    gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, vertSrc));
+    gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, fragSrc));
     gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
         fail("program failed to link:\n" + gl.getProgramInfoLog(prog));
@@ -311,7 +430,9 @@ const LANES = wasm.laneCount();
 // agreement with the simulation (RFC-002 §6).
 const MERGE_RADIUS_SCALE = wasm.mergeRadiusScale();
 
-const program = buildProgram(gl);
+const program = buildProgram(gl, VERT, FRAG);
+const trailProgram = buildProgram(gl, TRAIL_VERT, TRAIL_FRAG);
+
 const u = {
     scale: gl.getUniformLocation(program, "u_scale"),
     centre: gl.getUniformLocation(program, "u_centre"),
@@ -322,6 +443,14 @@ const u = {
     hot: gl.getUniformLocation(program, "u_hot"),
     hotPoint: gl.getUniformLocation(program, "u_hot_point"),
     gain: gl.getUniformLocation(program, "u_gain"),
+};
+const ut = {
+    scale: gl.getUniformLocation(trailProgram, "u_scale"),
+    centre: gl.getUniformLocation(trailProgram, "u_centre"),
+    tint: gl.getUniformLocation(trailProgram, "u_tint"),
+    now: gl.getUniformLocation(trailProgram, "u_now"),
+    halfLife: gl.getUniformLocation(trailProgram, "u_half_life"),
+    alpha: gl.getUniformLocation(trailProgram, "u_alpha"),
 };
 
 const quad = gl.createBuffer();
@@ -337,6 +466,7 @@ gl.blendFunc(gl.ONE, gl.ONE);
 let cfg = readConfig();
 let panels = null;      // [base, simd], allocated to the current n
 let panelCapacity = 0;
+let trails = null;      // [base, simd]; sized by TRAIL_BODIES, never by n
 
 // Pictures per second, per panel, and the serial of the one on the GPU.
 //
@@ -380,6 +510,9 @@ function restart() {
         ];
         panelCapacity = cfg.n;
     }
+    // Independent of n, so these are built once and only ever reset.
+    if (!trails) trails = [buildTrails(gl), buildTrails(gl)];
+    for (const tr of trails) resetTrails(tr);
     const t = performance.now();
     for (const which of [BASE, SIMD]) {
         rate[which] = { updates: wasm.renderUpdates(which), since: t, fps: 0 };
@@ -389,6 +522,181 @@ function restart() {
     document.body.dataset.mode = MODE_NAME[cfg.mode];
     syncControls();
     for (const el of document.querySelectorAll('[data-f="lanes"]')) el.textContent = LANES;
+}
+
+// --- trails --------------------------------------------------------------
+// One store per panel. A "track" is one drawn trail: the slot it is following,
+// its points, and the last position and mass it saw there — everything the
+// staleness test needs.
+
+function buildTrails(gl) {
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const vbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, TRAIL_BODIES * TRAIL_POINTS * 3 * 4, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+
+    return {
+        vao, vbo,
+        points: new Float32Array(TRAIL_BODIES * TRAIL_POINTS * 3),
+        slot: new Int32Array(TRAIL_BODIES).fill(-1),   // which particle slot
+        len: new Int32Array(TRAIL_BODIES),             // points held
+        lastX: new Float32Array(TRAIL_BODIES),
+        lastY: new Float32Array(TRAIL_BODIES),
+        lastMass: new Float32Array(TRAIL_BODIES),
+        // Scratch, hoisted so the per-picture update allocates nothing.
+        sel: new Int32Array(TRAIL_BODIES),
+        selMass: new Float32Array(TRAIL_BODIES),
+        step: new Float32Array(TRAIL_BODIES),
+        sortBuf: new Float32Array(TRAIL_BODIES),
+    };
+}
+
+function resetTrails(tr) {
+    tr.slot.fill(-1);
+    tr.len.fill(0);
+}
+
+// The TRAIL_BODIES heaviest slots, into `tr.sel`. One pass, with a running
+// minimum so the common case costs one comparison per particle rather than an
+// insertion — n reaches 65536 here and this runs every published picture.
+function selectHeaviest(tr, data, count) {
+    const sel = tr.sel, mass = tr.selMass;
+    let held = 0, minAt = 0;
+    sel.fill(-1);
+    for (let i = 0; i < count; i++) {
+        const m = data[i * FLOATS + 2];
+        if (held < TRAIL_BODIES) {
+            sel[held] = i; mass[held] = m; held++;
+            if (held === TRAIL_BODIES) {
+                minAt = 0;
+                for (let k = 1; k < TRAIL_BODIES; k++) if (mass[k] < mass[minAt]) minAt = k;
+            }
+        } else if (m > mass[minAt]) {
+            sel[minAt] = i; mass[minAt] = m;
+            minAt = 0;
+            for (let k = 1; k < TRAIL_BODIES; k++) if (mass[k] < mass[minAt]) minAt = k;
+        }
+    }
+    return held;
+}
+
+// Advances every trail by one point. Called once per published picture, so a
+// trail's length is fixed in *simulated* time and the two panels stay
+// comparable even though they publish at different rates.
+//
+// `serial` is that picture's number, stored with each point and turned into an
+// opacity by the shader.
+function updateTrails(tr, data, count, serial) {
+    const held = selectHeaviest(tr, data, count);
+
+    // Drop tracks whose slot fell out of the heaviest set.
+    for (let k = 0; k < TRAIL_BODIES; k++) {
+        if (tr.slot[k] < 0) continue;
+        let kept = false;
+        for (let s = 0; s < held; s++) if (tr.sel[s] === tr.slot[k]) { kept = true; break; }
+        if (!kept) { tr.slot[k] = -1; tr.len[k] = 0; }
+    }
+
+    // Adopt newly-heaviest slots into free tracks.
+    for (let s = 0; s < held; s++) {
+        const slot = tr.sel[s];
+        let found = false;
+        for (let k = 0; k < TRAIL_BODIES; k++) if (tr.slot[k] === slot) { found = true; break; }
+        if (found) continue;
+        for (let k = 0; k < TRAIL_BODIES; k++) {
+            if (tr.slot[k] < 0) {
+                tr.slot[k] = slot; tr.len[k] = 0;
+                tr.lastX[k] = data[slot * FLOATS];
+                tr.lastY[k] = data[slot * FLOATS + 1];
+                tr.lastMass[k] = data[slot * FLOATS + 2];
+                break;
+            }
+        }
+    }
+
+    // Steps first, then the median, then the verdicts — the threshold is a
+    // property of the picture, so it has to be known before any track is
+    // judged against it.
+    let moving = 0;
+    for (let k = 0; k < TRAIL_BODIES; k++) {
+        const slot = tr.slot[k];
+        if (slot < 0 || tr.len[k] === 0) { tr.step[k] = 0; continue; }
+        const dx = data[slot * FLOATS] - tr.lastX[k];
+        const dy = data[slot * FLOATS + 1] - tr.lastY[k];
+        tr.step[k] = Math.hypot(dx, dy);
+        tr.sortBuf[moving++] = tr.step[k];
+    }
+    let threshold = Infinity;
+    if (moving > 0) {
+        const steps = tr.sortBuf.subarray(0, moving);
+        steps.sort();
+        threshold = TRAIL_JUMP_FACTOR * steps[moving >> 1];
+    }
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, tr.vbo);
+
+    for (let k = 0; k < TRAIL_BODIES; k++) {
+        const slot = tr.slot[k];
+        if (slot < 0) continue;
+        const x = data[slot * FLOATS], y = data[slot * FLOATS + 1];
+        const m = data[slot * FLOATS + 2];
+
+        if (tr.len[k] > 0) {
+            const jumped = tr.step[k] > threshold;
+            const swelled = tr.lastMass[k] > 0 && m / tr.lastMass[k] > TRAIL_MASS_RATIO;
+            // Either says this slot is no longer the body the trail belongs
+            // to, so the history behind it is somebody else's.
+            if (jumped || swelled) tr.len[k] = 0;
+        }
+
+        const base = k * TRAIL_POINTS * 3;
+        let wholeTrack = false;
+        if (tr.len[k] === TRAIL_POINTS) {
+            // Make room in one go rather than one point at a time, so this
+            // costs a copy every TRAIL_COMPACT pictures instead of every one.
+            tr.points.copyWithin(base, base + TRAIL_COMPACT * 3, base + TRAIL_POINTS * 3);
+            tr.len[k] -= TRAIL_COMPACT;
+            wholeTrack = true;
+        }
+        const at = base + tr.len[k] * 3;
+        tr.points[at] = x;
+        tr.points[at + 1] = y;
+        tr.points[at + 2] = serial;
+        tr.len[k] += 1;
+
+        // Twelve bytes in the common case; the whole trail only when it was
+        // just compacted.
+        if (wholeTrack) {
+            gl.bufferSubData(gl.ARRAY_BUFFER, base * 4,
+                tr.points.subarray(base, base + tr.len[k] * 3));
+        } else {
+            gl.bufferSubData(gl.ARRAY_BUFFER, at * 4, tr.points.subarray(at, at + 3));
+        }
+
+        tr.lastX[k] = x; tr.lastY[k] = y; tr.lastMass[k] = m;
+    }
+}
+
+function drawTrails(tr, halfX, halfY, serial) {
+    // Compositing rather than adding: see TRAIL_ALPHA. Crossing trails settle
+    // at the tint instead of climbing to white.
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(trailProgram);
+    gl.uniform2f(ut.scale, 1 / halfX, 1 / halfY);
+    gl.uniform2f(ut.centre, 0, 0);
+    gl.uniform3f(ut.tint, ...TRAIL_TINT);
+    gl.uniform1f(ut.now, serial);
+    gl.uniform1f(ut.halfLife, TRAIL_HALF_LIFE);
+    gl.uniform1f(ut.alpha, TRAIL_ALPHA);
+    gl.bindVertexArray(tr.vao);
+    for (let k = 0; k < TRAIL_BODIES; k++) {
+        if (tr.len[k] < 2) continue;
+        gl.drawArrays(gl.LINE_STRIP, k * TRAIL_POINTS, tr.len[k]);
+    }
 }
 
 // --- the frame -----------------------------------------------------------
@@ -428,6 +736,28 @@ function drawPanel(which, x, y, w, h) {
     const halfX = aspect >= 1 ? extent * aspect : extent;
     const halfY = aspect >= 1 ? extent : extent / aspect;
 
+    // A new picture: upload it once, and advance the trails once. Both are
+    // gated on the serial rather than on the frame, which is what fixes a
+    // trail's length in simulated time — base publishes far fewer pictures
+    // than simd, and per-frame trails would make that look like a difference
+    // in the physics.
+    const serial = wasm.renderUpdates(which);
+    const panel = panels[which];
+    if (serial !== published[which]) {
+        gl.bindVertexArray(panel.vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, panel.instances);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, data);
+        published[which] = serial;
+        if (cfg.trails) updateTrails(trails[which], data, data.length / FLOATS, serial);
+    }
+
+    // Trails first, so a body always sits on top of its own path.
+    if (cfg.trails) drawTrails(trails[which], halfX, halfY, serial);
+
+    // Back to additive for the bodies: overlapping ones sum toward white, which
+    // is what says "crowded" (see CLEAR).
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.useProgram(program);
     gl.uniform2f(u.scale, 1 / halfX, 1 / halfY);
     gl.uniform2f(u.centre, 0, 0);
     gl.uniform1f(u.radius, MERGE_RADIUS_SCALE * DISPLAY_SCALE);
@@ -443,19 +773,11 @@ function drawPanel(which, x, y, w, h) {
     // finished. Uploading only when a new one exists is what puts the deficit
     // on screen: a starved kernel repeats a picture instead of showing a
     // smaller step of motion.
-    const serial = wasm.renderUpdates(which);
-    const panel = panels[which];
     gl.bindVertexArray(panel.vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, panel.instances);
-    if (serial !== published[which]) {
-        gl.bufferSubData(gl.ARRAY_BUFFER, 0, data);
-        published[which] = serial;
-    }
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, data.length / FLOATS);
 }
 
 function draw() {
-    gl.useProgram(program);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
     const w = canvas.width, h = canvas.height;
@@ -546,6 +868,7 @@ function syncControls() {
     form.preset.value = cfg.preset;
     form.mode.value = cfg.mode;
     form.merging.checked = cfg.merging === 1;
+    form.trails.checked = cfg.trails === 1;
     form.speed.value = cfg.speed;
     form.zoom.value = cfg.zoom;
     form.speedout.value = Math.pow(10, cfg.speed).toFixed(2) + "×";
@@ -571,6 +894,16 @@ form.addEventListener("submit", (e) => {
 for (const name of ["preset", "mode", "merging"]) {
     form[name].addEventListener("change", () => form.requestSubmit());
 }
+
+// Trails are a view setting, not physics, so unlike `merging` this does not
+// reseed — restarting a run to switch off a visual effect would throw away the
+// run you were watching. Switching them on starts the histories from here
+// rather than showing a stale one.
+form.trails.addEventListener("change", () => {
+    cfg.trails = form.trails.checked ? 1 : 0;
+    if (cfg.trails) for (const tr of trails) resetTrails(tr);
+    writeConfig(cfg);
+});
 
 // The sliders are view and pacing settings, not physics: they take effect
 // without reseeding, so you can slow a run down while watching it.

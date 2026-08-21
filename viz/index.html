@@ -192,6 +192,11 @@ throughput. The measurement is Phase-A ns/tick
     <span class="cap">Accretion: bodies within d_merge become one, conserving mass, momentum and centre of mass (RFC §2.6). The demo runs a merge radius 100× tighter than Config's default, which otherwise merges 85 % of the disk in the first second and unbinds it.</span>
   </label>
 
+  <label>
+    <input type="checkbox" name="trails"> trails
+    <span class="cap">Draws the recent path of the 32 heaviest bodies as a thin line. A point is added each published picture and one drops off the tail, so a trail is a fixed length in simulated time — the two panels stay comparable even though one publishes far fewer pictures. Only the heaviest, because a thousand curves is a hairball. Width and colour are constants and carry no quantity; mass is size and temperature is colour, as always.</span>
+  </label>
+
   <span class="spacer"></span>
   <button type="button" id="help-toggle" title="What do these do?">?</button>
   <button type="button" id="run" data-state="paused">start</button>
