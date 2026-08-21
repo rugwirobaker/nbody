@@ -1236,8 +1236,14 @@ for (const label of form.querySelectorAll("label")) {
     const cap = label.querySelector(".cap");
     const field = label.querySelector("input, select");
     if (!cap || !field) continue;
+    // The label's own words, not the field's `name`: the two differ where the
+    // control is named for the reader (layout) and the URL parameter is named
+    // for what it was (preset).
     const dt = document.createElement("dt");
-    dt.textContent = field.name;
+    dt.textContent = [...label.childNodes]
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent.trim())
+        .join(" ").trim() || field.name;
     const dd = document.createElement("dd");
     dd.textContent = cap.textContent;
     document.getElementById("help-list").append(dt, dd);

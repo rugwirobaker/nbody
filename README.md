@@ -121,7 +121,7 @@ and a drag that spent the budget would leave the address bar quietly disagreeing
 with the screen.
 
 The page opens paused. Space or the button starts it. Every setting that
-decides the run — n, seed, preset, mode, merging — reseeds from the start and
+decides the run — n, seed, layout, mode, merging — reseeds from the start and
 leaves the result paused, since two runs are only comparable if they began from
 the same conditions; **reset** puts the whole page back to its opening
 settings, cameras included, also paused. Speed and trails change what you are

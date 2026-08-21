@@ -172,28 +172,28 @@
   <div class="view"><span class="lbl">view</span><span class="gauge"><i data-f="knob"></i></span><b data-f="scale">—</b></div>
 </div>
 
-<div id="footnote">fps counts pictures, and every picture carries
-the same ten ticks of physics — so the rate is
-throughput. The measurement is Phase-A ns/tick
-(RFC §2.5). t is simulated time.</div>
+<div id="footnote">fps counts frames, and every frame carries the
+same ten steps of physics, so the rate reads as
+throughput. ns/tick is the force calculation
+alone. t is simulated time.</div>
 
 <form id="controls">
   <label>n
     <input type="number" name="n" min="1" max="65536" step="1">
-    <span class="cap">Particles. Phase A costs n² per tick, so this is the dial that matters. Pictures per second, stacked: 24 against 60 at n = 1000, 12 against 28 at 1500, 5 against 15 at 2000. Alone on screen each kernel gets the whole frame, so raise n to 1500 there — base collapses to 24 while simd still holds 60.</span>
+    <span class="cap">How many bodies. Every body pulls on every other one, so the cost of a step grows as n²: double n and each step costs four times as much. That makes this the dial that decides whether a build keeps up. With both on screen the SIMD build holds the display's refresh to about n = 1000, where the scalar build is already under half its rate; from n = 1500 neither keeps up, and the scalar build draws roughly a quarter of the SIMD build's frames — the four lanes showing through.</span>
   </label>
 
   <label>seed
     <input type="text" name="seed" spellcheck="false">
-    <span class="cap">Any integer, hex or decimal. Same seed + same settings ⇒ the same run, exactly. 0xC0FFEE means nothing physical — it is a pronounceable hex word, and it is the seed the benchmark tables record, so demo and bench runs correspond.</span>
+    <span class="cap">The starting arrangement is random, and this is the number the randomness starts from. The same seed with the same settings replays the same run exactly, and the address bar records both, so a run worth showing someone is a link. Decimal or 0x-prefixed hex.</span>
   </label>
 
-  <label>preset
+  <label>layout
     <select name="preset">
       <option value="0">disk</option>
       <option value="1">keplerian</option>
     </select>
-    <span class="cap">disk: a uniform rotating disk with mass spread evenly, so orbital speed rises with radius. keplerian: the same disk around one heavy central body, so v ∝ 1/√r — the solar-system profile.</span>
+    <span class="cap">How the bodies are laid out before anything moves. disk: a uniform rotating disk with mass spread evenly through it, so a body orbits faster the further out it sits. keplerian: the same disk around one heavy central body, whose pull dominates, so orbital speed falls as 1/√r — the profile the planets follow.</span>
   </label>
 
   <label>mode
@@ -202,23 +202,23 @@ throughput. The measurement is Phase-A ns/tick
       <option value="1">simd</option>
       <option value="2">stacked</option>
     </select>
-    <span class="cap">Which kernels run. Alone, a kernel may take the whole frame, so falling behind shows as a falling frame rate — switch between base and simd at n = 1500 to watch it. stacked runs both from one seed, base left and simd right, splitting the frame so neither can freeze the page; there each panel publishes at its own rate. They start bit-identical, so anything separating them is real.</span>
+    <span class="cap">Which kernels run. Alone, a kernel may take the whole frame, so falling behind shows as a falling frame rate — run base at n = 2000, then simd, to watch it. stacked runs both from one seed, base left and simd right, splitting the frame so neither can freeze the page; there each panel publishes at its own rate. They start bit-identical, so anything separating them is real.</span>
   </label>
 
   <label>speed
     <input type="range" name="speed" min="-1.5" max="0" step="0.05">
     <output name="speedout"></output>
-    <span class="cap">Wall clock fed to the accumulator, as a fraction of real time. Lower it to watch structure form. dt itself never changes, so the physics is identical either way. It stops at 1.0 because RFC §2.4's ten-tick clamp caps what one frame may claim.</span>
+    <span class="cap">How fast simulated time runs, as a fraction of real time. Turn it down to watch structure form. The step size is fixed and this does not change it — only how many steps a second of real time buys — so the trajectories are the same either way. It stops at 1× because a frame is allowed ten steps at most, and anything above that is dropped.</span>
   </label>
 
   <label>
     <input type="checkbox" name="merging"> merging
-    <span class="cap">Accretion: two bodies become one when their discs touch, conserving mass, momentum and centre of mass (RFC-002 §1.2). The size on screen is the size that merges, so you can see a merge coming. The demo overrides nothing: it runs on the library's own defaults.</span>
+    <span class="cap">Whether bodies collide and stick. Two become one when their discs touch, and the survivor carries both masses and the combined momentum. A body is drawn at the size that merges, so you can see a collision coming.</span>
   </label>
 
   <label>
     <input type="checkbox" name="trails"> trails
-    <span class="cap">Draws the recent path of the 32 heaviest bodies as a thin line. A point is added each published picture and one drops off the tail, so a trail is a fixed length in simulated time — the two panels stay comparable even though one publishes far fewer pictures. Only the heaviest, because a thousand curves is a hairball. Width and colour are constants and carry no quantity; mass is size and temperature is colour, as always.</span>
+    <span class="cap">Draws the recent path of the 32 heaviest bodies as a thin line. One point is added per frame and one drops off the tail, so a trail spans a fixed stretch of simulated time in both panels even when one is drawing far fewer frames. Only the heaviest, because a thousand curves is a hairball. The line's width and colour carry no quantity; mass is size and temperature is colour, as always.</span>
   </label>
 
   <span class="spacer"></span>
@@ -235,10 +235,11 @@ throughput. The measurement is Phase-A ns/tick
     SIMD structure-of-arrays kernel. Same force law, same integration order,
     same ordered-pair n² traversal. Only the memory layout and the instruction
     width differ.</p>
-    <p>Each frame owes ten ticks of physics (RFC §2.4). A panel publishes a
-    picture once it has finished them, so the fps figure counts pictures of
-    equal physical size and reads as throughput. The reported measurement stays
-    Phase-A nanoseconds per tick.</p>
+    <p>Each frame owes ten steps of physics. A panel draws only once it has
+    finished them, so every frame carries the same amount of physics and the
+    fps figure reads as throughput rather than as effort. The ns/tick figure
+    is the force calculation alone — the only part of a step where the two
+    builds differ.</p>
     <p>Size is mass: a body's radius is proportional to the square root of its
     mass, exactly as the merge rule computes it, so two discs at the same
     overlap are equally close to merging whatever they weigh. Bodies are drawn
