@@ -58,6 +58,32 @@ const HEAT_GAIN = 2.5;
 // is the part worth watching, and the zoom range below follows the rest.
 const VIEW_HALF_EXTENT = 2.8;
 
+// The zoom range, as exponents of two on the extent above: a half-width from
+// 0.04 R to 63 R. Named rather than repeated, because the slider's bounds, the
+// URL's validation and the wheel's clamp are the same range and drifting apart
+// would let one of them admit a view the others reject.
+const ZOOM_MIN = -6.0;
+const ZOOM_MAX = 4.5;
+
+// How far the view centre may travel from the origin.
+//
+// Derived from the widest view rather than chosen: at full zoom-out the centre
+// can reach the edge of what that view would have shown from the origin, and no
+// further. Panning is for inspecting structure off to one side, so the bound
+// only has to stop a fast drag from losing the field entirely.
+//
+// It can be a fixed number because the field's centre is fixed. Seeding zeroes
+// net momentum, the integrator conserves it, and merging conserves it too, so
+// the centre of mass never translates — the outward drift is the cloud
+// expanding about a stationary point, not moving away from one.
+const MAX_CENTRE = VIEW_HALF_EXTENT * Math.pow(2, ZOOM_MAX);
+
+// Zoom exponent per pixel of wheel travel. A notch on a typical mouse is ~100
+// px, so this puts a notch a little under a factor of two.
+const ZOOM_PER_PIXEL = 0.008;
+
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
 // How much larger than life bodies are drawn.
 //
 // True radii are far below a pixel: k = 5e-4 puts a mass-1 body at 0.14 px and
@@ -308,9 +334,15 @@ void main() {
 // base publishes at ~24 fps against simd's 60 (see the table above).
 const DEFAULTS = {
     n: 1000, seed: 0xc0ffee, preset: 0, merging: 1, trails: 1, mode: MODE.stacked,
-    // Slider positions, both exponents: speed = 10^speed, extent = 1.4 * 2^zoom.
-    speed: 0, zoom: 0,
+    // Slider position, an exponent: speed = 10^speed.
+    speed: 0,
 };
+
+// The opening camera, held by each panel separately. `zoom` is an exponent —
+// the view's half-extent is 1.4 * 2^zoom — and `cx`/`cy` are the world point at
+// the middle of that panel, which starts at the origin because that is where
+// the disk is seeded and where its centre of mass stays.
+const DEFAULT_VIEW = { zoom: 0, cx: 0, cy: 0 };
 
 function readConfig() {
     const q = new URLSearchParams(location.search);
@@ -321,11 +353,11 @@ function readConfig() {
         if (!Number.isInteger(v) || v < lo || v > hi) return DEFAULTS[key];
         return v;
     };
-    const real = (key, lo, hi) => {
+    const real = (key, lo, hi, fallback = DEFAULTS[key]) => {
         const raw = q.get(key);
-        if (raw === null) return DEFAULTS[key];
+        if (raw === null) return fallback;
         const v = Number(raw);
-        if (!Number.isFinite(v) || v < lo || v > hi) return DEFAULTS[key];
+        if (!Number.isFinite(v) || v < lo || v > hi) return fallback;
         return v;
     };
     return {
@@ -336,9 +368,43 @@ function readConfig() {
         trails: int("trails", 0, 1),
         mode: int("mode", 0, 2),
         speed: real("speed", -1.5, 0),
-        zoom: real("zoom", -6.0, 4.5),
+        // One camera per panel, suffixed by the panel's own index. A bare
+        // `zoom` is what the single-camera build wrote, so links from it still
+        // open at the scale they recorded, applied to both panels.
+        view: [BASE, SIMD].map((which) => ({
+            zoom: real(`zoom${which}`, ZOOM_MIN, ZOOM_MAX, real("zoom", ZOOM_MIN, ZOOM_MAX, DEFAULT_VIEW.zoom)),
+            cx: real(`cx${which}`, -MAX_CENTRE, MAX_CENTRE, DEFAULT_VIEW.cx),
+            cy: real(`cy${which}`, -MAX_CENTRE, MAX_CENTRE, DEFAULT_VIEW.cy),
+        })),
     };
 }
+
+// `history.replaceState` is rate-limited: past a burst the browser stops
+// applying calls, silently and without throwing, and the address bar quietly
+// stops matching the screen. A drag delivers pointermove at up to 120 Hz, so
+// writing on every one spends the whole budget in a couple of seconds — and
+// spends it on states nobody will ever link to.
+//
+// So the write waits for the gesture to end rather than sampling it: each
+// change pushes the deadline back, and a drag of any length costs one write.
+// That keeps the rate far below any browser's limit without the limit having to
+// be known, and it is what the URL means anyway — where you landed, not the
+// journey. The readouts are updated immediately by `syncControls`, so only the
+// address bar lags, and only while the hand is still moving.
+const CONFIG_WRITE_MS = 250;
+let configWritePending = 0;
+
+function scheduleConfigWrite() {
+    clearTimeout(configWritePending);
+    configWritePending = setTimeout(() => writeConfig(cfg), CONFIG_WRITE_MS);
+}
+
+// A tab closed mid-gesture would otherwise lose the last move, since the
+// deadline never arrives.
+addEventListener("pagehide", () => {
+    clearTimeout(configWritePending);
+    writeConfig(cfg);
+});
 
 function writeConfig(cfg) {
     const q = new URLSearchParams();
@@ -349,7 +415,14 @@ function writeConfig(cfg) {
     q.set("trails", cfg.trails);
     q.set("mode", cfg.mode);
     q.set("speed", cfg.speed.toFixed(2));
-    q.set("zoom", cfg.zoom.toFixed(2));
+    for (const which of [BASE, SIMD]) {
+        const v = cfg.view[which];
+        q.set(`zoom${which}`, v.zoom.toFixed(2));
+        // Four places rather than two: the view half-width bottoms out at
+        // 0.044 R, where a hundredth is a quarter of the screen.
+        q.set(`cx${which}`, v.cx.toFixed(4));
+        q.set(`cy${which}`, v.cy.toFixed(4));
+    }
     history.replaceState(null, "", "?" + q.toString());
 }
 
@@ -681,13 +754,13 @@ function updateTrails(tr, data, count, serial) {
     }
 }
 
-function drawTrails(tr, halfX, halfY, serial) {
+function drawTrails(tr, cam, halfX, halfY, serial) {
     // Compositing rather than adding: see TRAIL_ALPHA. Crossing trails settle
     // at the tint instead of climbing to white.
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(trailProgram);
     gl.uniform2f(ut.scale, 1 / halfX, 1 / halfY);
-    gl.uniform2f(ut.centre, 0, 0);
+    gl.uniform2f(ut.centre, cam.cx, cam.cy);
     gl.uniform3f(ut.tint, ...TRAIL_TINT);
     gl.uniform1f(ut.now, serial);
     gl.uniform1f(ut.halfLife, TRAIL_HALF_LIFE);
@@ -697,6 +770,78 @@ function drawTrails(tr, halfX, halfY, serial) {
         if (tr.len[k] < 2) continue;
         gl.drawArrays(gl.LINE_STRIP, k * TRAIL_POINTS, tr.len[k]);
     }
+}
+
+// --- the camera ----------------------------------------------------------
+// One camera per panel, moved independently.
+//
+// A shared camera would only be worth having if the two panels showed the same
+// thing, and they do not. They start bit-identical and then diverge — `@reduce`
+// reorders the summation and the system is chaotic (RFC §3.5) — so by the time
+// there is anything to look at, the same screen position is a different part of
+// a different arrangement in each. What the page compares is throughput, which
+// the HUD reports in ns/tick; the pictures are not in correspondence and tying
+// them to one view would only stop you inspecting either.
+
+// The view's world-space half-extents, for one panel at this pixel size. The
+// aspect correction is what stops a half-width panel in stacked mode from
+// squashing the disk.
+//
+// The pointer handlers below need the same numbers the shader gets, since a
+// pixel only means a world distance through them, so this is shared rather
+// than computed twice.
+function viewFor(which, w, h) {
+    const extent = VIEW_HALF_EXTENT * Math.pow(2, cfg.view[which].zoom);
+    const aspect = w / h;
+    return aspect >= 1
+        ? { halfX: extent * aspect, halfY: extent }
+        : { halfX: extent, halfY: extent / aspect };
+}
+
+// Which panel's viewport a device-pixel x falls in, and where that viewport is.
+// Mirrors the split `draw` makes, so a gesture lands in the panel it looks like
+// it landed in — and moves that panel's camera alone.
+function panelAt(px) {
+    const w = canvas.width, h = canvas.height;
+    if (cfg.mode !== MODE.stacked) {
+        return { which: cfg.mode === MODE.base ? BASE : SIMD, x: 0, y: 0, w, h };
+    }
+    const half = Math.floor(w / 2);
+    return px < half
+        ? { which: BASE, x: 0, y: 0, w: half, h }
+        : { which: SIMD, x: half, y: 0, w: w - half, h };
+}
+
+// A pointer event in device pixels, with y measured from the bottom as GL
+// measures it. The ratio is read from the canvas rather than from
+// `devicePixelRatio` so it matches whatever `resize` last committed.
+function pointerPixels(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+        px: (e.clientX - rect.left) * (canvas.width / rect.width),
+        py: canvas.height - (e.clientY - rect.top) * (canvas.height / rect.height),
+    };
+}
+
+// The world point a pixel is over, given the panel it is in and that panel's
+// view. The inverse of the shader's `(world - centre) * scale`, and the two
+// have to stay inverses: the whole of zoom-about-a-point is holding this value
+// fixed while the scale changes.
+function worldAt(px, py, panel, view) {
+    const cam = cfg.view[panel.which];
+    const ndcX = (2 * (px - panel.x)) / panel.w - 1;
+    const ndcY = (2 * (py - panel.y)) / panel.h - 1;
+    return {
+        ndcX, ndcY,
+        wx: cam.cx + ndcX * view.halfX,
+        wy: cam.cy + ndcY * view.halfY,
+    };
+}
+
+function setCentre(which, cx, cy) {
+    const cam = cfg.view[which];
+    cam.cx = clamp(cx, -MAX_CENTRE, MAX_CENTRE);
+    cam.cy = clamp(cy, -MAX_CENTRE, MAX_CENTRE);
 }
 
 // --- the frame -----------------------------------------------------------
@@ -729,12 +874,8 @@ function drawPanel(which, x, y, w, h) {
 
     gl.viewport(x, y, w, h);
 
-    // Correct for this viewport's own aspect, so a half-width panel in stacked
-    // mode does not squash the disk.
-    const extent = VIEW_HALF_EXTENT * Math.pow(2, cfg.zoom);
-    const aspect = w / h;
-    const halfX = aspect >= 1 ? extent * aspect : extent;
-    const halfY = aspect >= 1 ? extent : extent / aspect;
+    const { halfX, halfY } = viewFor(which, w, h);
+    const cam = cfg.view[which];
 
     // A new picture: upload it once, and advance the trails once. Both are
     // gated on the serial rather than on the frame, which is what fixes a
@@ -752,14 +893,14 @@ function drawPanel(which, x, y, w, h) {
     }
 
     // Trails first, so a body always sits on top of its own path.
-    if (cfg.trails) drawTrails(trails[which], halfX, halfY, serial);
+    if (cfg.trails) drawTrails(trails[which], cam, halfX, halfY, serial);
 
     // Back to additive for the bodies: overlapping ones sum toward white, which
     // is what says "crowded" (see CLEAR).
     gl.blendFunc(gl.ONE, gl.ONE);
     gl.useProgram(program);
     gl.uniform2f(u.scale, 1 / halfX, 1 / halfY);
-    gl.uniform2f(u.centre, 0, 0);
+    gl.uniform2f(u.centre, cam.cx, cam.cy);
     gl.uniform1f(u.radius, MERGE_RADIUS_SCALE * DISPLAY_SCALE);
     // The floor is a pixel count, so it converts through the current zoom.
     gl.uniform1f(u.minRadius, (MIN_RADIUS_PX * halfY * 2.0) / h);
@@ -870,9 +1011,23 @@ function syncControls() {
     form.merging.checked = cfg.merging === 1;
     form.trails.checked = cfg.trails === 1;
     form.speed.value = cfg.speed;
-    form.zoom.value = cfg.zoom;
     form.speedout.value = Math.pow(10, cfg.speed).toFixed(2) + "×";
-    form.zoomout.value = (VIEW_HALF_EXTENT * Math.pow(2, cfg.zoom)).toFixed(2) + " R";
+    syncGauges();
+}
+
+// The view is reported, not set: each panel's gauge says where its own camera
+// ended up, and the only thing that moves a camera is the pointer over that
+// panel. A slider would have to belong to one panel or to both, and neither is
+// true now that the cameras are independent.
+function syncGauges() {
+    for (const which of [BASE, SIMD]) {
+        const { zoom } = cfg.view[which];
+        const el = hud[which];
+        el.querySelector('[data-f="scale"]').textContent =
+            (VIEW_HALF_EXTENT * Math.pow(2, zoom)).toFixed(2) + " R";
+        el.querySelector('[data-f="knob"]').style.left =
+            ((100 * (zoom - ZOOM_MIN)) / (ZOOM_MAX - ZOOM_MIN)).toFixed(2) + "%";
+    }
 }
 
 form.addEventListener("submit", (e) => {
@@ -905,17 +1060,145 @@ form.trails.addEventListener("change", () => {
     writeConfig(cfg);
 });
 
-// The sliders are view and pacing settings, not physics: they take effect
-// without reseeding, so you can slow a run down while watching it.
-for (const name of ["speed", "zoom"]) {
-    form[name].addEventListener("input", () => {
-        cfg[name] = Number(form[name].value);
-        syncControls();
-        writeConfig(cfg);
+// Speed is a pacing setting, not physics: it takes effect without reseeding, so
+// a run can be slowed down while you watch it.
+form.speed.addEventListener("input", () => {
+    cfg.speed = Number(form.speed.value);
+    syncControls();
+    scheduleConfigWrite();
+});
+
+runButton.addEventListener("click", () => setRunning(!running));
+
+// The stacked divider stops above the control bar. `innerHeight - top` is the
+// bar's own height plus the gap it sits in, so this holds when the window is
+// resized and when the bar wraps to a second row — which is the case a fixed
+// number would get wrong.
+const dividerGap = 10;
+const fitDivider = () => document.documentElement.style.setProperty(
+    "--controls-clearance",
+    innerHeight - form.getBoundingClientRect().top + dividerGap + "px");
+
+// The border box, because that is what `getBoundingClientRect` measures. The
+// default content box would miss any change that grows the bar without growing
+// its contents.
+new ResizeObserver(fitDivider).observe(form, { box: "border-box" });
+
+// --- the camera, from the pointer ----------------------------------------
+// Gestures rather than controls: the bar stays the width it was, and the view
+// is moved by pointing at the thing you want to look at.
+
+// Every change goes through here, so the address bar keeps being the record of
+// what is on screen — the same contract the sliders honour.
+function cameraChanged() {
+    syncControls();
+    scheduleConfigWrite();
+}
+
+// Zoom about the pointer: the world point under the cursor is the one thing
+// held fixed. Solve for the centre that puts it back where it was after the
+// scale changes, rather than scaling about the origin and letting it slide.
+canvas.addEventListener("wheel", (e) => {
+    // Without this the page scrolls instead, and on a trackpad it rubber-bands.
+    e.preventDefault();
+
+    const { px, py } = pointerPixels(e);
+    const panel = panelAt(px);
+    const cam = cfg.view[panel.which];
+    const before = viewFor(panel.which, panel.w, panel.h);
+    const { ndcX, ndcY, wx, wy } = worldAt(px, py, panel, before);
+
+    // Firefox reports lines and pages rather than pixels. A line is about the
+    // body's line height; a page is the viewport.
+    const delta = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? e.deltaY * 16
+                : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? e.deltaY * panel.h
+                : e.deltaY;
+
+    // Wheel-up is a negative delta, which lowers the exponent and shrinks the
+    // extent: scrolling up zooms in.
+    cam.zoom = clamp(cam.zoom + delta * ZOOM_PER_PIXEL, ZOOM_MIN, ZOOM_MAX);
+
+    const after = viewFor(panel.which, panel.w, panel.h);
+    setCentre(panel.which, wx - ndcX * after.halfX, wy - ndcY * after.halfY);
+    cameraChanged();
+}, { passive: false });
+
+// Drag to pan. The panel is fixed at the press: in stacked mode a drag that
+// crosses the divider is still the drag it started as, and re-deriving the
+// panel mid-gesture would make the field jump under the hand.
+let drag = null;
+
+canvas.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    const { px, py } = pointerPixels(e);
+    const panel = panelAt(px);
+    drag = {
+        id: e.pointerId, panel, x: e.clientX, y: e.clientY,
+        view: viewFor(panel.which, panel.w, panel.h),
+    };
+    // Capture, so a drag that leaves the canvas — or the window — still tracks
+    // and still ends.
+    canvas.setPointerCapture(e.pointerId);
+    document.body.classList.add("dragging");
+});
+
+canvas.addEventListener("pointermove", (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width, scaleY = canvas.height / rect.height;
+    const dx = (e.clientX - drag.x) * scaleX;
+    const dy = (e.clientY - drag.y) * scaleY;
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+
+    // The grabbed point follows the cursor, so the centre moves against it. The
+    // signs differ because clientY grows downward and the world does not.
+    const { panel, view } = drag;
+    const cam = cfg.view[panel.which];
+    setCentre(
+        panel.which,
+        cam.cx - (2 * dx * view.halfX) / panel.w,
+        cam.cy + (2 * dy * view.halfY) / panel.h,
+    );
+    cameraChanged();
+});
+
+for (const type of ["pointerup", "pointercancel"]) {
+    canvas.addEventListener(type, (e) => {
+        if (!drag || e.pointerId !== drag.id) return;
+        drag = null;
+        document.body.classList.remove("dragging");
     });
 }
 
-runButton.addEventListener("click", () => setRunning(!running));
+// Double-click restores the framing the page opens with, for the panel under
+// the pointer and that panel only — the same rule the other two gestures follow.
+// Reset is to the origin because that is where the field's centre of mass is and
+// where it stays (see MAX_CENTRE), so there is nothing to hunt for.
+//
+// Holding shift copies this panel's view to the other instead. Independent
+// cameras are right for inspecting, but a run you have framed somewhere
+// interesting is worth seeing twice, and re-finding the same window by hand at
+// 0.04 R would be hopeless.
+canvas.addEventListener("dblclick", (e) => {
+    const { which } = panelAt(pointerPixels(e).px);
+    if (e.shiftKey) matchViews(cfg.view[which]);
+    else cfg.view[which] = { ...DEFAULT_VIEW };
+    cameraChanged();
+});
+
+function matchViews(view) {
+    // Copies, not one shared object: they have to keep drifting apart from here
+    // independently, which they cannot do if both panels hold the same record.
+    cfg.view = [{ ...view }, { ...view }];
+}
+
+// Both panels back to the opening view. The gestures are per-panel by design,
+// so putting the two side by side again is the one thing they cannot express.
+document.getElementById("reset-view").addEventListener("click", () => {
+    matchViews(DEFAULT_VIEW);
+    cameraChanged();
+});
 
 // --- help ----------------------------------------------------------------
 // The captions live once, in the markup, next to the control they describe.

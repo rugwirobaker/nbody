@@ -20,10 +20,20 @@
     font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     overflow: hidden;
   }
-  #gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  /* touch-action, or a one-finger drag scrolls the page instead of panning.
+     The cursor is the only affordance a wheel-and-drag surface gets. */
+  #gl {
+    position: fixed; inset: 0; width: 100%; height: 100%; display: block;
+    touch-action: none; cursor: grab;
+  }
+  body.dragging #gl { cursor: grabbing; }
 
+  /* Stops above the control bar rather than running the full height: below the
+     bar the line has nothing to divide. The clearance is measured, since the
+     bar grows when it wraps. */
   #divider {
-    position: fixed; top: 0; bottom: 0; left: 50%;
+    position: fixed; top: 0; left: 50%;
+    bottom: var(--controls-clearance, 68px);
     width: 1px; background: var(--rule); display: none;
   }
   body[data-mode="stacked"] #divider { display: block; }
@@ -40,6 +50,24 @@
   .hud .stats { font-size: 12px; color: var(--dim); }
   .hud .stats b { color: var(--ink); font-weight: 400; }
   .hud .stats .sep { opacity: .45; margin: 0 .45em; }
+
+  /* Read-only: the view is moved by pointing at it, and this only reports
+     where the panel's camera ended up. */
+  .hud .view {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 4px; font-size: 11px; color: var(--dim);
+  }
+  .hud .view .lbl { letter-spacing: .08em; text-transform: uppercase; opacity: .7; }
+  .hud .view b { color: var(--ink); font-weight: 400; }
+  .hud .gauge { position: relative; width: 84px; height: 9px; }
+  .hud .gauge::before {
+    content: ""; position: absolute; top: 50%; left: 0; right: 0;
+    height: 1px; margin-top: -.5px; background: var(--rule);
+  }
+  .hud .gauge i {
+    position: absolute; top: 50%; width: 7px; height: 7px;
+    margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: #ffd9b0;
+  }
   .hud .stats.slow b.rt { color: var(--warn); }
   .hud .stats.fast b.rt { color: var(--good); }
 
@@ -135,11 +163,13 @@
 <div class="hud" id="hud-base">
   <div class="name">base — scalar AoS</div>
   <div class="stats">n&nbsp;<b data-f="count">—</b><span class="sep">·</span>fps&nbsp;<b data-f="fps">—</b><span class="sep">·</span>t&nbsp;<b data-f="clock">—</b><span class="sep">·</span>ns/tick&nbsp;<b data-f="ns">—</b><span class="sep">·</span>×rt&nbsp;<b class="rt" data-f="rt">—</b></div>
+  <div class="view"><span class="lbl">view</span><span class="gauge"><i data-f="knob"></i></span><b data-f="scale">—</b></div>
 </div>
 
 <div class="hud" id="hud-simd">
   <div class="name">simd — SoA, <span data-f="lanes">—</span> lanes</div>
   <div class="stats">n&nbsp;<b data-f="count">—</b><span class="sep">·</span>fps&nbsp;<b data-f="fps">—</b><span class="sep">·</span>t&nbsp;<b data-f="clock">—</b><span class="sep">·</span>ns/tick&nbsp;<b data-f="ns">—</b><span class="sep">·</span>×rt&nbsp;<b class="rt" data-f="rt">—</b></div>
+  <div class="view"><span class="lbl">view</span><span class="gauge"><i data-f="knob"></i></span><b data-f="scale">—</b></div>
 </div>
 
 <div id="footnote">fps counts pictures, and every picture carries
@@ -181,12 +211,6 @@ throughput. The measurement is Phase-A ns/tick
     <span class="cap">Wall clock fed to the accumulator, as a fraction of real time. Lower it to watch structure form. dt itself never changes, so the physics is identical either way. It stops at 1.0 because RFC §2.4's ten-tick clamp caps what one frame may claim.</span>
   </label>
 
-  <label>zoom
-    <input type="range" name="zoom" min="-6" max="4.5" step="0.05">
-    <output name="zoomout"></output>
-    <span class="cap">View half-width, in disk radii. The range is wide because the system is: merging leaks energy, so the survivors keep drifting outward — half of them are past 7 disk radii after a hundred seconds. Zoom out to follow them, or in to pick apart a cluster where small bodies are hidden inside a big one's glow.</span>
-  </label>
-
   <label>
     <input type="checkbox" name="merging"> merging
     <span class="cap">Accretion: two bodies become one when their discs touch, conserving mass, momentum and centre of mass (RFC-002 §1.2). The size on screen is the size that merges, so you can see a merge coming. The demo overrides nothing: it runs on the library's own defaults.</span>
@@ -198,6 +222,7 @@ throughput. The measurement is Phase-A ns/tick
   </label>
 
   <span class="spacer"></span>
+  <button type="button" id="reset-view" title="Both panels back to the opening view">reset view</button>
   <button type="button" id="help-toggle" title="What do these do?">?</button>
   <button type="button" id="run" data-state="paused">start</button>
   <button type="submit">restart</button>
@@ -224,7 +249,21 @@ throughput. The measurement is Phase-A ns/tick
     a body that has just eaten something runs white and then orange, and burns
     brighter with it. Size is mass, so the two never mean the same thing, and
     white cores in the crowd are particles overlapping rather than heat.</p>
-    <dl id="help-list"></dl>
+    <dl id="help-list">
+      <dt>drag · wheel</dt>
+      <dd>Drag to pan, and use the wheel to zoom about the pointer: whatever is
+      under the cursor stays under it, so point at a cluster and scroll in to
+      pick it apart. Double-click restores the opening view. Each panel carries
+      its own camera and the gestures move only the panel they land in — the two
+      runs diverge after the first few merges, so the same screen position is a
+      different part of a different arrangement in each. The range runs from a
+      half-width of 0.04 disk radii to 63, and it is wide because the system is:
+      merging leaks energy, so the survivors keep drifting outward, half of them
+      past seven disk radii after a hundred seconds. Each panel's gauge reads
+      out where its own view sits in that range. To compare the same window in
+      both, shift-double-click the panel you have framed and the other takes its
+      view; <b>reset view</b> in the bar puts both back where they started.</dd>
+    </dl>
     <div class="dismiss">Esc or click anywhere to close · Space toggles run</div>
   </div>
 </div>
