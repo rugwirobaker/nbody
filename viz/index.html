@@ -11,6 +11,9 @@
     --panel: #0c101a;
     --warn: #ffb454;
     --good: #7fd6a0;
+    /* The colour the particles were before the temperature ramp, kept as the
+       interface's one accent. */
+    --cream: #ffd9b0;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
@@ -66,7 +69,7 @@
   }
   .hud .gauge i {
     position: absolute; top: 50%; width: 7px; height: 7px;
-    margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: #ffd9b0;
+    margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: var(--cream);
   }
   .hud .stats.slow b.rt { color: var(--warn); }
   .hud .stats.fast b.rt { color: var(--good); }
@@ -98,12 +101,25 @@
   }
   #controls input[type="number"] { width: 6em; }
   #controls input[type="text"] { width: 8em; }
-  #controls input[type="range"] { width: 7.5em; padding: 0; accent-color: #ffd9b0; }
+  #controls input[type="range"] { width: 7.5em; padding: 0; accent-color: var(--cream); }
   #controls output { color: var(--ink); min-width: 4.2em; }
   #controls button { cursor: pointer; padding: 4px 12px; }
   #controls button:hover { border-color: var(--dim); }
   #controls .spacer { margin-left: auto; }
+  /* Lit only while it says start: on a bar of outlined controls the one
+     coloured thing is the thing to press, and nothing else on the page is
+     asking to be pressed before it. A wash rather than a fill, which at this
+     size would be a lamp against the field. Once running it is `pause` and no
+     longer the call to action, so it goes back to an outline. */
   #run { min-width: 6em; }
+  #run[data-state="paused"] {
+    color: var(--cream); border-color: var(--cream);
+    background: color-mix(in srgb, var(--cream) 10%, transparent);
+  }
+  #run[data-state="paused"]:hover {
+    border-color: var(--cream);
+    background: color-mix(in srgb, var(--cream) 18%, transparent);
+  }
   #run[data-state="running"] { border-color: var(--good); color: var(--good); }
   #help-toggle { width: 2.2em; padding: 4px 0; text-align: center; }
 
