@@ -113,9 +113,30 @@ reordering amplified by a chaotic system (RFC §3.5), not two seeding paths.
 The configuration lives in the URL —
 `?n=4096&seed=0xC0FFEE&preset=disk&merging=1&mode=stacked` — and the controls
 write to it, so a link reproduces a run exactly. That is the same reason
-`nbody-bench` prints the seed and full config above every table.
+`nbody-bench` prints the seed and full config above every table. The view is
+part of that record: `zoom0`/`cx0`/`cy0` and `zoom1`/`cx1`/`cy1` restore each
+panel's framing along with the run. A continuous gesture coalesces its writes
+rather than making one per event, because `history.replaceState` is rate-limited
+and a drag that spent the budget would leave the address bar quietly disagreeing
+with the screen.
 
-The page opens paused. Space or the button starts it.
+The page opens paused. Space or the button starts it. Drag the field to pan and
+use the wheel to zoom about the pointer; double-click restores that panel's
+opening view.
+
+Each panel carries its own camera, and a gesture moves only the panel it lands
+in. A shared one would only be worth having if the panels showed the same thing.
+They do not: they start bit-identical and then diverge, so within a few merges
+the same screen position is a different part of a different arrangement in each.
+What the page compares is throughput, which the HUD reports in ns/tick — the
+pictures are not in correspondence, and binding them to one view would only stop
+you inspecting either. For the times you do want both on the same window,
+shift-double-click propagates one panel's view to the other, and **reset view**
+returns both to the opening framing.
+
+There is no zoom control. Each panel's HUD carries a read-only gauge showing
+where its own view sits between 0.04 R and 63 R, and the pointer is the only
+thing that moves it.
 
 ### How the comparison reads on screen
 
@@ -266,6 +287,17 @@ long as you watch:
 
 The default view is 2.8 disk radii, which frames the accretion phase; the zoom
 range reaches 63 R to follow what comes after.
+
+What that table does not show is any translation. Seeding zeroes net momentum,
+the integrator conserves it, and merging conserves it too, so the centre of mass
+never moves: the numbers above are a cloud expanding about a stationary point,
+not one travelling away from a fixed camera. That is why zooming out is enough
+to keep the whole system in frame, and why resetting the view to the origin is
+the same thing as recentring on the field.
+
+Panning earns its place at the other end of the range. At full zoom the view is
+0.04 disk radii wide, and without a movable centre the only structure you could
+magnify is whatever happened to sit at the origin.
 
 ## What the baseline compiles to
 
@@ -482,8 +514,10 @@ Nothing below is claimed until its test passes.
 - [x] Trails — the recent path of the heaviest bodies, stored in world
       coordinates and drawn as lines, with the body each one belongs to
       recovered from the packed buffer rather than from particle identity
-- [ ] Pan, and zoom about a point rather than the origin, so a cloud can be
-      followed as the system drifts outward past any fixed view
+- [x] Pan and zoom about a point — drag to move the view, wheel to scale it
+      about the pointer, so structure away from the origin can be magnified
+      rather than only centred structure. One camera per panel, since the two
+      runs diverge and the same screen position is not the same thing in both
 - [ ] Close the energy ledger (RFC-003) — bank the merged pair's vanished
       potential and account radiated heat rather than deleting it, turning
       RFC-001 test (d)'s claim into the sharp invariant it was written as
